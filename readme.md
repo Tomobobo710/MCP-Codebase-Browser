@@ -1,5 +1,6 @@
 # MCP Codebase Browser
-A Python-based Model Context Protocol (MCP) server that gives Claude full access to your codebase, allowing it to read, write, create, delete, and manage files and directories. This server was created with assistance from Claude 3.7 Sonnet.
+A Python-based Model Context Protocol (MCP) server that gives Claude full access to your codebase, allowing it to read, write, create, delete, and manage files and directories. This server was created with assistance from Claude 3.7 Sonnet.  
+![MCP Server](https://private-user-images.githubusercontent.com/64335998/432573576-562915ad-c4d4-4855-9228-5a8c2834f608.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDQzMzc2NjcsIm5iZiI6MTc0NDMzNzM2NywicGF0aCI6Ii82NDMzNTk5OC80MzI1NzM1NzYtNTYyOTE1YWQtYzRkNC00ODU1LTkyMjgtNWE4YzI4MzRmNjA4LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA0MTElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNDExVDAyMDkyN1omWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTFhMDU2YmIwMDljZThmZTg2M2E1YWYxODAyMGUxZTE3NmQ5YjZkMzRhNWNmNDQ4MDY4ZmUwMTQ3OGM5MDljZWYmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.0Rr_Cgt_ris4y3kdwXmz8xSykvmHI7L6ByXlyWEk5-g)
 ## Features
 * File Browsing: List files and directories in your codebase
 * File Reading: View the contents of any code file
@@ -77,6 +78,7 @@ Ask Claude to perform tasks like:
 * "Search for all uses of 'import' in the codebase"
 * "Rename file X to Y"
 * "Create a new directory called 'models'"
+
 
 ![Claude will request permission to interact with your codebase](https://private-user-images.githubusercontent.com/64335998/432572069-7752f517-a0f4-40e9-b28c-3e2835e301ad.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDQzMzcxODQsIm5iZiI6MTc0NDMzNjg4NCwicGF0aCI6Ii82NDMzNTk5OC80MzI1NzIwNjktNzc1MmY1MTctYTBmNC00MGU5LWIyOGMtM2UyODM1ZTMwMWFkLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA0MTElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNDExVDAyMDEyNFomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTA3ZjE3MDk3NzgzZDFlNDg3YmRmNTFhYjRiMmE5YmRjM2Q2MDk4MDcyMWVkZjdiOGEyYjA3NjdjYzFmNTA5NGMmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.53gRLfJ0gel9i1M5QvltPrR8vMeYvratTt9KlKb8TjE)
 
