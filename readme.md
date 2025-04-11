@@ -20,7 +20,7 @@ A Python-based Model Context Protocol (MCP) server that gives Claude full access
 ## Installation
 ### Quick Install
 
-Run setup.cmd to automatically:
+Run setup.bat to automatically:
 
 Create a Python virtual environment
 Install required dependencies
