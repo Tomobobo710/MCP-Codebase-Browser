@@ -22,10 +22,10 @@ A Python-based Model Context Protocol (MCP) server that gives Claude full access
 
 Run setup.bat to automatically:
 
-Create a Python virtual environment
-Install required dependencies
-Configure the server
-Display Claude Desktop configuration instructions
+* Create a Python virtual environment
+* Install required dependencies
+* Configure the server
+* Display Claude Desktop configuration instructions
 
 
 
@@ -70,12 +70,12 @@ Restart Claude Desktop
 Look for the hammer icon in the bottom right corner of the chat input box
 Ask Claude to perform tasks like:
 
-"List all files in the project"
-"Show me the content of src/main.py"
-"Create a new file called utils.js with the following content: [code]"
-"Search for all uses of 'import' in the codebase"
-"Rename file X to Y"
-"Create a new directory called 'models'"
+* "List all files in the project"
+* "Show me the content of src/main.py"
+* "Create a new file called utils.js with the following content: [code]"
+* "Search for all uses of 'import' in the codebase"
+* "Rename file X to Y"
+* "Create a new directory called 'models'"
 
 
 
