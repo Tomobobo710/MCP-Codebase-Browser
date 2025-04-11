@@ -42,7 +42,7 @@ pip install mcp pathlib glob2
 ```
 Configure Claude Desktop:
 
-Open or create %AppData%\Claude\claude_desktop_config.json
+Open or create %AppData%\Claude\claude_desktop_config.json  
 Add the following configuration (adjust paths as needed):
 ```
 {
@@ -58,16 +58,17 @@ Add the following configuration (adjust paths as needed):
 
 Set your codebase path in the server script:
 
-Open codebase_server.py
+Open codebase_server.py  
 Modify the CODEBASE_PATH variable to point to your project directory
 
 
 
 ## Usage
 
-Add the configuration to Claude Desktop's `claude_desktop_config.json`
-Restart Claude Desktop
-Look for the hammer icon in the bottom right corner of the chat input box
+Place your entire codebase into the Project directory  
+Add the configuration to Claude Desktop's `claude_desktop_config.json`  
+Restart Claude Desktop  
+Look for the hammer icon in the bottom right corner of the chat input box  
 Ask Claude to perform tasks like:
 
 * "List all files in the project"
