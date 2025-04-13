@@ -18,7 +18,7 @@ read_lines      | Read a specific line or set of lines
 edit_lines      | Edit a specific line or set of lines
 backup_codebase | Backs up the entire Projects directory
 list_backups    | Lists available backups
-restore_codebase| Read a specific line or set of lines
+restore_codebase| Restores a backup
 
 ## Requirements
 * Windows
@@ -104,7 +104,7 @@ This tool will allow Claude to make changes to your files. He will probably brea
 
 ![Uh oh](https://private-user-images.githubusercontent.com/64335998/433124637-d56f79b3-20e2-44a7-8bd9-a10ccc4337f8.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDQ1NDAzMjcsIm5iZiI6MTc0NDU0MDAyNywicGF0aCI6Ii82NDMzNTk5OC80MzMxMjQ2MzctZDU2Zjc5YjMtMjBlMi00NGE3LThiZDktYTEwY2NjNDMzN2Y4LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA0MTMlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNDEzVDEwMjcwN1omWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWY1NWJmYzFiMjM1NzhjMDVmYjYwMzE0YTA4ZTdmNjU5YzNmNDExYzE5YWYxNjI0MTliOWE0MGUzYmZhYTQ5Y2YmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.FingsDQG8XXKC350q4G2yFlh3cNwgwDswbFxW0Ofk-U)
 
-This project is a WIP, I can't take responsibility for this tool losing your data, I reccomend asking Claude to make backups often.
+This project is a WIP, I can't take responsibility for this tool losing your data, I recommend asking Claude to make backups often.
 
 ## Troubleshooting
 * If Claude doesn't show the hammer icon, check that Claude Desktop is restarted
