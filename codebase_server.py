@@ -287,6 +287,175 @@ def copy_file(source_path: str, destination_path: str, overwrite: bool = False):
     except Exception as e:
         return {"error": f"Error copying file: {str(e)}"}
 
+@mcp.tool()
+def read_lines(file_path: str, start_line: int = None, end_line: int = None):
+    """
+    Read specific line(s) from a file
+    
+    Parameters:
+    - file_path: Path to the file relative to the codebase
+    - start_line: First line to read (1-indexed)
+    - end_line: Last line to read (inclusive, 1-indexed)
+    
+    If start_line is None, returns the entire file
+    If only start_line is specified, returns just that line
+    If both are specified, returns that range of lines (inclusive)
+    """
+    full_path = Path(CODEBASE_PATH) / file_path
+    
+    try:
+        if not full_path.exists():
+            return {"error": "File not found"}
+        
+        with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
+            # If no line number is specified, return the whole file
+            if start_line is None:
+                content = f.read()
+                return {
+                    "content": content,
+                    "lineCount": content.count('\n') + 1,
+                    "type": "entire_file"
+                }
+            
+            # Otherwise, read all lines and extract the requested ones
+            lines = f.readlines()
+            
+            # Handle single line request
+            if end_line is None:
+                if start_line < 1 or start_line > len(lines):
+                    return {"error": f"Line {start_line} is out of range (file has {len(lines)} lines)"}
+                
+                # Return just the requested line (adjust for 0-based indexing)
+                return {
+                    "content": lines[start_line - 1],
+                    "lineNumber": start_line,
+                    "type": "single_line"
+                }
+            
+            # Handle line range request
+            else:
+                # Validate line numbers
+                if start_line < 1:
+                    start_line = 1
+                if end_line > len(lines):
+                    end_line = len(lines)
+                if start_line > end_line:
+                    return {"error": "Start line cannot be greater than end line"}
+                
+                # Extract the requested range (adjust for 0-based indexing)
+                selected_lines = lines[start_line - 1:end_line]
+                return {
+                    "content": "".join(selected_lines),
+                    "startLine": start_line,
+                    "endLine": end_line,
+                    "lineCount": len(selected_lines),
+                    "type": "line_range"
+                }
+    except Exception as e:
+        return {"error": f"Error reading lines: {str(e)}"}
+
+@mcp.tool()
+def edit_lines(file_path: str, start_line: int, end_line: int = None, new_content: str = None, mode: str = "replace"):
+    """
+    Edit line(s) in a file with several operation modes
+    
+    Parameters:
+    - file_path: Path to the file relative to the codebase
+    - start_line: First line to edit (1-indexed)
+    - end_line: Last line to edit (inclusive, 1-indexed), only needed for replace/delete modes
+    - new_content: New content to write (required for replace/insert modes)
+    - mode: Operation mode - "replace", "insert", or "delete"
+      - replace: Replace lines from start_line to end_line with new_content
+      - insert: Insert new_content at start_line (end_line is ignored)
+      - delete: Delete lines from start_line to end_line (new_content is ignored)
+    """
+    full_path = Path(CODEBASE_PATH) / file_path
+    
+    try:
+        if not full_path.exists():
+            return {"error": "File not found"}
+        
+        # Validate parameters based on mode
+        if mode not in ["replace", "insert", "delete"]:
+            return {"error": f"Invalid mode: {mode}. Must be 'replace', 'insert', or 'delete'"}
+        
+        if mode in ["replace", "insert"] and new_content is None:
+            return {"error": f"New content must be provided for {mode} mode"}
+        
+        if mode in ["replace", "delete"] and end_line is None:
+            end_line = start_line  # Default to single line operation
+        
+        # Read the file
+        with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+        
+        # Validate line numbers
+        file_length = len(lines)
+        if start_line < 1:
+            start_line = 1
+        
+        # Adjust for 0-based indexing
+        start_idx = start_line - 1
+        
+        # Perform the requested operation
+        if mode == "replace":
+            if end_line > file_length:
+                end_line = file_length
+            if start_line > end_line:
+                return {"error": "Start line cannot be greater than end line"}
+            
+            end_idx = end_line - 1
+            
+            # Convert new_content to a list of lines with proper line endings
+            if not new_content.endswith('\n'):
+                new_content += '\n'
+            new_lines = new_content.splitlines(True)
+            
+            # Replace the specified lines
+            updated_lines = lines[:start_idx] + new_lines + lines[end_idx + 1:]
+            
+            operation_desc = f"Replaced lines {start_line}-{end_line}"
+            
+        elif mode == "insert":
+            # Convert new_content to a list of lines with proper line endings
+            if not new_content.endswith('\n'):
+                new_content += '\n'
+            new_lines = new_content.splitlines(True)
+            
+            # Handle insertion at the end of the file
+            if start_idx > file_length:
+                start_idx = file_length
+            
+            # Insert the new content
+            updated_lines = lines[:start_idx] + new_lines + lines[start_idx:]
+            
+            operation_desc = f"Inserted at line {start_line}"
+            
+        elif mode == "delete":
+            if end_line > file_length:
+                end_line = file_length
+            if start_line > end_line:
+                return {"error": "Start line cannot be greater than end line"}
+            
+            end_idx = end_line - 1
+            
+            # Delete the specified lines
+            updated_lines = lines[:start_idx] + lines[end_idx + 1:]
+            
+            operation_desc = f"Deleted lines {start_line}-{end_line}"
+        
+        # Write the updated content back to the file
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.writelines(updated_lines)
+        
+        return {
+            "success": True,
+            "message": f"{operation_desc} in {file_path}",
+            "newLineCount": len(updated_lines)
+        }
+    except Exception as e:
+        return {"error": f"Error editing lines: {str(e)}"}
+
 @mcp.resource("project://overview")
 def project_overview():
     """Get an overview of the project structure and key files"""
