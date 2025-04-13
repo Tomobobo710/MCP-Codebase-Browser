@@ -2,6 +2,8 @@ from mcp.server.fastmcp import FastMCP
 import os
 import sys
 import shutil
+import re
+from fnmatch import fnmatch
 from pathlib import Path
 import glob
 
@@ -86,56 +88,81 @@ def read_file(file_path: str):
         return {"error": f"Error reading file: {str(e)}"}
 
 @mcp.tool()
-def search_code(search_term: str, file_pattern: str = "**/*.{py,js,ts,jsx,tsx,java,c,cpp,h,hpp,go,rs,rb}", max_results: int = 20):
-    """Search for specific patterns in the codebase"""
+def search_code(search_term: str, file_pattern: str = "**/*"):
+    """
+    Simplified search that scans all files in the codebase for a given term
+    
+    Parameters:
+    - search_term: Text to search for
+    - file_pattern: File pattern to search (defaults to all files)
+    """
+    results = []
+    total_matches = 0
+    files_checked = 0
+    base_path = Path(CODEBASE_PATH)
+    
+    # Debug info
+    debug_info = {
+        "search_term": search_term,
+        "base_path": str(base_path),
+        "errors": []
+    }
+    
     try:
-        results = []
-        base_path = Path(CODEBASE_PATH)
-        
-        # Expand the file pattern to include all matching files
-        file_patterns = [p.strip() for p in file_pattern.split(',')]
-        all_files = []
-        for pattern in file_patterns:
-            matches = glob.glob(str(base_path / pattern), recursive=True)
-            all_files.extend([f for f in matches if os.path.isfile(f)])
-        
-        for full_path in all_files:
-            if len(results) >= max_results:
-                break
+        # Find all files recursively
+        for root, _, files in os.walk(base_path):
+            for filename in files:
+                full_path = os.path.join(root, filename)
+                rel_path = os.path.relpath(full_path, base_path)
                 
-            try:
-                file_size = os.path.getsize(full_path)
-                if file_size > 1024 * 1024:  # Skip large files
+                files_checked += 1
+                
+                try:
+                    # Skip very large files
+                    if os.path.getsize(full_path) > 10 * 1024 * 1024:  # 10MB
+                        continue
+                        
+                    # Try to read the file
+                    with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                    
+                    # Simple case-insensitive search
+                    if search_term.lower() in content.lower():
+                        # If found, read line by line to get line numbers
+                        matches = []
+                        with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
+                            for i, line in enumerate(f):
+                                if search_term.lower() in line.lower():
+                                    matches.append({
+                                        "lineNumber": i + 1,
+                                        "content": line.rstrip('\r\n')
+                                    })
+                        
+                        if matches:
+                            results.append({
+                                "file": rel_path,
+                                "matches": matches,
+                                "matchCount": len(matches)
+                            })
+                            total_matches += len(matches)
+                
+                except Exception as e:
+                    debug_info["errors"].append(f"Error with {rel_path}: {str(e)}")
                     continue
-                
-                rel_path = os.path.relpath(full_path, CODEBASE_PATH)
-                
-                with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
-                    lines = f.readlines()
-                
-                matching_lines = []
-                for i, line in enumerate(lines):
-                    if search_term in line:
-                        matching_lines.append({
-                            "lineNumber": i + 1,
-                            "content": line.strip()
-                        })
-                
-                if matching_lines:
-                    results.append({
-                        "file": rel_path,
-                        "matches": matching_lines
-                    })
-            except Exception as e:
-                print(f"Error processing file {full_path}: {str(e)}")
         
         return {
             "results": results,
-            "totalMatches": sum(len(file_result["matches"]) for file_result in results),
-            "searchTerm": search_term
+            "totalMatches": total_matches,
+            "filesChecked": files_checked,
+            "searchTerm": search_term,
+            "debug": debug_info
         }
+        
     except Exception as e:
-        return {"error": f"Error searching codebase: {str(e)}"}
+        return {
+            "error": f"Error searching codebase: {str(e)}",
+            "debug": debug_info
+        }
 
 @mcp.tool()
 def write_file(file_path: str, content: str, mode: str = "overwrite"):
