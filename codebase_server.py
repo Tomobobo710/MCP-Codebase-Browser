@@ -638,6 +638,164 @@ def edit_lines(file_path: str, start_line: int, end_line: int = None, new_conten
         }
     except Exception as e:
         return {"error": f"Error editing lines: {str(e)}"}
+        
+@mcp.tool()
+def backup_codebase(backup_name: str = None):
+    """
+    Create a backup of the entire codebase
+    
+    Parameters:
+    - backup_name: Optional custom name for the backup (default: timestamp-based name)
+    """
+    try:
+        # Determine backup directory path (one level above script directory)
+        script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+        backup_root = script_dir / "Backups"
+        
+        # Create Backups directory if it doesn't exist
+        if not backup_root.exists():
+            backup_root.mkdir(parents=True)
+            print(f"Created Backups directory at: {backup_root}")
+        
+        # Generate default backup name if none provided
+        if backup_name is None:
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_name = f"backup_{timestamp}"
+        else:
+            # Sanitize the backup name to ensure it's a valid directory name
+            backup_name = re.sub(r'[^\w\-\.]', '_', backup_name)
+        
+        # Create full backup path
+        backup_path = backup_root / backup_name
+        
+        # Check if backup with this name already exists
+        if backup_path.exists():
+            return {
+                "success": False,
+                "error": f"Backup with name '{backup_name}' already exists. Choose a different name."
+            }
+        
+        # Copy the entire codebase to the backup location
+        source_path = Path(CODEBASE_PATH)
+        shutil.copytree(source_path, backup_path)
+        
+        return {
+            "success": True,
+            "message": f"Successfully created backup '{backup_name}'",
+            "backup_name": backup_name
+        }
+    except Exception as e:
+        return {"error": f"Error creating backup: {str(e)}"}
+
+@mcp.tool()
+def list_backups():
+    """List all available backups of the codebase"""
+    try:
+        # Determine backup directory path
+        script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+        backup_root = script_dir / "Backups"
+        
+        # Check if Backups directory exists
+        if not backup_root.exists():
+            return {
+                "backups": [],
+                "count": 0,
+                "message": "No backups available yet. Use backup_codebase to create a backup."
+            }
+        
+        # Get all directories in the Backups folder
+        backups = []
+        for item in backup_root.iterdir():
+            if item.is_dir():
+                # Get creation time for sorting/display
+                try:
+                    created_time = item.stat().st_ctime
+                    from datetime import datetime
+                    created_time_str = datetime.fromtimestamp(created_time).strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # Get size of backup
+                    size_bytes = sum(f.stat().st_size for f in item.glob('**/*') if f.is_file())
+                    size_mb = size_bytes / (1024 * 1024)
+                    
+                    backups.append({
+                        "name": item.name,
+                        "created": created_time_str,
+                        "size_mb": round(size_mb, 2)
+                    })
+                except Exception as e:
+                    # If we can't get stats, just add the name
+                    backups.append({"name": item.name})
+        
+        # Sort backups by creation time (newest first) if available
+        backups.sort(key=lambda x: x.get("created", ""), reverse=True)
+        
+        return {
+            "backups": backups,
+            "count": len(backups),
+            "backup_root": "Backups"  # Only show the folder name, not the full path
+        }
+    except Exception as e:
+        return {"error": f"Error listing backups: {str(e)}"}
+
+@mcp.tool()
+def restore_codebase(backup_name: str, confirm: bool = False):
+    """
+    Restore the codebase from a backup
+    
+    Parameters:
+    - backup_name: Name of the backup to restore from
+    - confirm: Must be set to True to confirm the restoration (this will delete current codebase)
+    """
+    try:
+        # Require explicit confirmation
+        if not confirm:
+            return {
+                "success": False,
+                "error": "Restoration requires confirmation. Set confirm=True to proceed. Warning: This will replace your current codebase."
+            }
+        
+        # Determine backup directory path
+        script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+        backup_root = script_dir / "Backups"
+        backup_path = backup_root / backup_name
+        
+        # Validate backup exists
+        if not backup_path.exists() or not backup_path.is_dir():
+            return {
+                "success": False,
+                "error": f"Backup '{backup_name}' not found. Use list_backups to see available backups."
+            }
+        
+        # Get target directory (codebase path)
+        target_path = Path(CODEBASE_PATH)
+        
+        # Remove current codebase contents
+        if target_path.exists():
+            # Remove all contents but keep the directory
+            for item in target_path.iterdir():
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    os.remove(item)
+        else:
+            # Create target directory if it doesn't exist
+            target_path.mkdir(parents=True)
+        
+        # Copy backup contents to codebase directory
+        for item in backup_path.iterdir():
+            if item.is_dir():
+                shutil.copytree(item, target_path / item.name)
+            else:
+                shutil.copy2(item, target_path / item.name)
+        
+        return {
+            "success": True,
+            "message": f"Successfully restored codebase from backup '{backup_name}'",
+            "backup_name": backup_name
+        }
+    except Exception as e:
+        return {"error": f"Error restoring backup: {str(e)}"}
 
 # Start the server when script is run directly
 if __name__ == "__main__":
