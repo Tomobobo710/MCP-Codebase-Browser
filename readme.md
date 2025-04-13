@@ -2,7 +2,6 @@
 A Python-based Model Context Protocol (MCP) server that gives Claude full access to your codebase, allowing it to read, write, create, delete, and manage files and directories. This server was created with assistance from Claude 3.7 Sonnet.  
 ![MCP Server](https://private-user-images.githubusercontent.com/64335998/432573576-562915ad-c4d4-4855-9228-5a8c2834f608.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDQzMzgxNDIsIm5iZiI6MTc0NDMzNzg0MiwicGF0aCI6Ii82NDMzNTk5OC80MzI1NzM1NzYtNTYyOTE1YWQtYzRkNC00ODU1LTkyMjgtNWE4YzI4MzRmNjA4LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA0MTElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNDExVDAyMTcyMlomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTRkNzY3ZTkyOTZjMzU4OWMwMzExYTRlMjllYzUwNjUzOTg4MGRlNjMwNjEyNDBiNDU0N2I5N2FlZjFmMTIxMWImWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.sqTQO4Phm3T5vx1-q9IQmx_Yd_5Sfg_tNWoRTLHYpg4)
 
-
 ## Available Tools
 Tool name       | Description
 ----------------|--------------------------------------------------
@@ -69,14 +68,18 @@ Set your codebase path in the server script:
 Edit codebase_server.py  
 Modify the CODEBASE_PATH variable to point to your project directory
 
-
-
 ## Usage
 Place your entire codebase into the Project directory  
 Add the configuration to Claude Desktop's `claude_desktop_config.json`  
 Restart Claude Desktop  
 Look for the hammer icon in the bottom right corner of the chat input box  
-Claude can now perform codebase tasks when you ask him to, consider the following examples:
+When Claude trys to use the tool, he will ask for permission first  
+
+
+![Claude will request permission to interact with your codebase](https://private-user-images.githubusercontent.com/64335998/432572069-7752f517-a0f4-40e9-b28c-3e2835e301ad.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDQzMzgxNDIsIm5iZiI6MTc0NDMzNzg0MiwicGF0aCI6Ii82NDMzNTk5OC80MzI1NzIwNjktNzc1MmY1MTctYTBmNC00MGU5LWIyOGMtM2UyODM1ZTMwMWFkLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA0MTElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNDExVDAyMTcyMlomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWRjNzk5ODViZTFiOTg4YTE0ODM5MWUwMDQxYmU5NTM2ZGM1ZDljZjVmN2Q0NGE3MjJlNjNiOTE2OWI2NWI4Y2YmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.05DMlllK2LcU8_VRTu-Mac3yhRlSJyF3SX5maHWJLts)
+
+
+Claude can now perform various codebase tasks when you ask him to, consider the following examples:
 
 * "List all files in the project"
 * "Read the content of src/main.py"
@@ -91,10 +94,6 @@ Claude can now perform codebase tasks when you ask him to, consider the followin
 * "List our backed up projects'"
 * "Restore 'my_project_backup'"
 
-
-![Claude will request permission to interact with your codebase](https://private-user-images.githubusercontent.com/64335998/432572069-7752f517-a0f4-40e9-b28c-3e2835e301ad.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDQzMzgxNDIsIm5iZiI6MTc0NDMzNzg0MiwicGF0aCI6Ii82NDMzNTk5OC80MzI1NzIwNjktNzc1MmY1MTctYTBmNC00MGU5LWIyOGMtM2UyODM1ZTMwMWFkLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA0MTElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNDExVDAyMTcyMlomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWRjNzk5ODViZTFiOTg4YTE0ODM5MWUwMDQxYmU5NTM2ZGM1ZDljZjVmN2Q0NGE3MjJlNjNiOTE2OWI2NWI4Y2YmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.05DMlllK2LcU8_VRTu-Mac3yhRlSJyF3SX5maHWJLts)
-
-
 ## Safety Features
 * 1MB file size limit to prevent loading extremely large files
 * Through abstraction of the actual filepath, Claude should be restricted to the codebase path
@@ -103,7 +102,7 @@ Claude can now perform codebase tasks when you ask him to, consider the followin
 # WARNING
 This tool will allow Claude to make changes to your files. He will probably break things.
 
-![Uh oh](https://private-user-images.githubusercontent.com/64335998/433123069-7439dd18-fe8e-4a70-b577-e1490380801a.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDQ1Mzk4OTksIm5iZiI6MTc0NDUzOTU5OSwicGF0aCI6Ii82NDMzNTk5OC80MzMxMjMwNjktNzQzOWRkMTgtZmU4ZS00YTcwLWI1NzctZTE0OTAzODA4MDFhLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA0MTMlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNDEzVDEwMTk1OVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWJhNjAxMWU4OThmNGE3YmVmZTljYjdmNTY2Yjk3MjM3ZmQ3ZGJmZmNlZGZiODRiN2VjZGFjY2MyZDFhNGRhNzMmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.nYqjNaevNSsKPk3w8mJeDdfsDHGbuSyIeNqD9e7-xMw)
+![Uh oh](https://private-user-images.githubusercontent.com/64335998/433124637-d56f79b3-20e2-44a7-8bd9-a10ccc4337f8.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDQ1NDAzMjcsIm5iZiI6MTc0NDU0MDAyNywicGF0aCI6Ii82NDMzNTk5OC80MzMxMjQ2MzctZDU2Zjc5YjMtMjBlMi00NGE3LThiZDktYTEwY2NjNDMzN2Y4LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA0MTMlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNDEzVDEwMjcwN1omWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWY1NWJmYzFiMjM1NzhjMDVmYjYwMzE0YTA4ZTdmNjU5YzNmNDExYzE5YWYxNjI0MTliOWE0MGUzYmZhYTQ5Y2YmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.FingsDQG8XXKC350q4G2yFlh3cNwgwDswbFxW0Ofk-U)
 
 This project is a WIP, I can't take responsibility for this tool losing your data, I reccomend asking Claude to make backups often.
 
