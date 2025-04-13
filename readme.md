@@ -53,10 +53,10 @@ Open or create %AppData%\Claude\claude_desktop_config.json
 Add a configuration (adjust paths as needed):
 ```
 {
-	"mcpServers": {
-	  "MCP_Codebase_Browser": {
-		"command": "C:\path\to\your\mcp_env\Scripts\python.exe",
-		"args": ["C:\path\to\your\codebase_server.py"]
+  "mcpServers": {
+	"MCP_Codebase_Browser": {
+	  "command": "C:\path\to\your\mcp_env\Scripts\python.exe",
+	  "args": ["C:\path\to\your\codebase_server.py"]
 	}
   }
 }
