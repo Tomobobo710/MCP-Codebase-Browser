@@ -483,57 +483,6 @@ def edit_lines(file_path: str, start_line: int, end_line: int = None, new_conten
     except Exception as e:
         return {"error": f"Error editing lines: {str(e)}"}
 
-@mcp.resource("project://overview")
-def project_overview():
-    """Get an overview of the project structure and key files"""
-    try:
-        base_path = Path(CODEBASE_PATH)
-        
-        # Look for README files
-        readme_content = ""
-        readme_paths = list(base_path.glob("README*"))
-        if readme_paths:
-            with open(readme_paths[0], 'r', encoding='utf-8', errors='replace') as f:
-                readme_content = f.read()
-        
-        # Look for package info files (package.json, pyproject.toml, etc.)
-        package_info = {}
-        package_json_path = base_path / "package.json"
-        pyproject_path = base_path / "pyproject.toml"
-        setup_py_path = base_path / "setup.py"
-        
-        if package_json_path.exists():
-            import json
-            with open(package_json_path, 'r') as f:
-                package_info = json.load(f)
-        elif pyproject_path.exists():
-            # Just note it exists, we won't parse TOML format here
-            package_info = {"name": "Python project with pyproject.toml"}
-        elif setup_py_path.exists():
-            package_info = {"name": "Python project with setup.py"}
-        
-        # Count files by extension
-        all_files = list(base_path.glob("**/*"))
-        all_files = [f for f in all_files if f.is_file()]
-        
-        file_types = {}
-        for file_path in all_files:
-            ext = file_path.suffix.lower()
-            file_types[ext] = file_types.get(ext, 0) + 1
-        
-        # Get top-level directories
-        top_level_dirs = [d.name for d in base_path.iterdir() if d.is_dir()]
-        
-        return {
-            "projectName": package_info.get("name", base_path.name),
-            "description": package_info.get("description", "No description available"),
-            "readme": readme_content,
-            "fileTypes": file_types,
-            "topLevelDirs": top_level_dirs
-        }
-    except Exception as e:
-        return {"error": f"Error generating project overview: {str(e)}"}
-
 # Start the server when script is run directly
 if __name__ == "__main__":
     print(f"MCP Codebase Browser running. Connect through Claude Desktop.")
