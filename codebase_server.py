@@ -88,30 +88,160 @@ def read_file(file_path: str):
         return {"error": f"Error reading file: {str(e)}"}
 
 @mcp.tool()
-def search_code(search_term: str, file_pattern: str = "**/*"):
+def search_code(
+    search_term: str, 
+    file_pattern: str = "**/*",
+    case_sensitive: bool = False,
+    include_block_content: bool = False,
+    max_results: int = 100
+):
     """
-    Simplified search that scans all files in the codebase for a given term
+    Search for text in code files with smart block detection
     
     Parameters:
     - search_term: Text to search for
     - file_pattern: File pattern to search (defaults to all files)
+    - case_sensitive: Whether to perform case-sensitive matching
+    - include_block_content: Whether to include the full text content of surrounding code blocks
+    - max_results: Maximum number of matching lines to return
     """
     results = []
     total_matches = 0
     files_checked = 0
     base_path = Path(CODEBASE_PATH)
     
-    # Debug info
-    debug_info = {
-        "search_term": search_term,
-        "base_path": str(base_path),
-        "errors": []
-    }
+    def detect_language(filename):
+        """Determine if a file uses braces or indentation for blocks"""
+        ext = os.path.splitext(filename.lower())[1]
+        
+        # Python and YAML use indentation
+        if ext in ['.py', '.pyx', '.pyw', '.yml', '.yaml']:
+            return 'indentation'
+        
+        # Most other languages use braces
+        elif ext in ['.js', '.ts', '.jsx', '.tsx', '.java', '.c', '.cpp', '.cs', '.go', '.php', '.swift', '.kt', '.rs']:
+            return 'braces'
+            
+        # Default to braces for unknown types
+        else:
+            return 'braces'
+    
+    def find_brace_block(lines, match_line_index):
+        """Find the boundaries of a code block using braces"""
+        # Default to showing just a few lines around the match if no block found
+        start_line = max(0, match_line_index - 3)
+        end_line = min(len(lines) - 1, match_line_index + 3)
+        
+        # Track brace nesting
+        open_braces = 0
+        close_braces = 0
+        found_opening = False
+        
+        # First, check the line itself and count braces
+        current_line = lines[match_line_index]
+        open_count_current = current_line.count('{')
+        close_count_current = current_line.count('}')
+        
+        # Search backwards for opening brace or function/class definition
+        for i in range(match_line_index, -1, -1):
+            line = lines[i]
+            open_count = line.count('{')
+            close_count = line.count('}')
+            
+            open_braces += open_count
+            close_braces += close_count
+            
+            # Check for function/method definition or class definition
+            if 'function ' in line or 'class ' in line or 'def ' in line or '= function' in line:
+                start_line = i
+                found_opening = True
+                break
+                
+            if open_braces > close_braces:
+                start_line = i
+                found_opening = True
+                break
+        
+        # Reset counters but account for braces on the current line
+        open_braces = open_count_current
+        close_braces = close_count_current
+        
+        # Only search for closing brace if we found an opening brace
+        if found_opening:
+            # Search forwards for closing brace
+            for i in range(match_line_index + 1, len(lines)):
+                line = lines[i]
+                open_count = line.count('{')
+                close_count = line.count('}')
+                
+                open_braces += open_count
+                close_braces += close_count
+                
+                if close_braces > open_braces:
+                    end_line = i
+                    break
+        
+        return start_line, end_line
+    
+    def find_indentation_block(lines, match_line_index):
+        """Find the boundaries of a code block using indentation (Python-style)"""
+        # Default to showing just a few lines around the match
+        start_line = max(0, match_line_index - 3)
+        end_line = min(len(lines) - 1, match_line_index + 3)
+        
+        # Get the indentation of the matched line
+        match_line = lines[match_line_index]
+        match_indent = len(match_line) - len(match_line.lstrip())
+        
+        # Find the start of the block (line ending with : with less indentation)
+        for i in range(match_line_index, -1, -1):
+            line = lines[i]
+            if not line.strip():  # Skip empty lines
+                continue
+                
+            indent = len(line) - len(line.lstrip())
+            
+            # If we find a line with less indentation and ending with :, it's likely the start of our block
+            if indent < match_indent and line.rstrip().endswith(':'):
+                start_line = i
+                block_indent = indent
+                break
+                
+            # If we find a line with significantly less indentation, it could be a parent block
+            if indent < match_indent and i > 0:
+                # Check if there's a block start nearby
+                for j in range(i, max(0, i-5), -1):
+                    prev = lines[j]
+                    if prev.rstrip().endswith(':'):
+                        start_line = j
+                        block_indent = len(prev) - len(prev.lstrip())
+                        break
+                break
+        
+        # Find the end of the block (first line with same or less indentation as block start)
+        block_indent = len(lines[start_line]) - len(lines[start_line].lstrip())
+        
+        for i in range(match_line_index + 1, len(lines)):
+            line = lines[i]
+            if not line.strip():  # Skip empty lines
+                continue
+                
+            indent = len(line) - len(line.lstrip())
+            
+            # If we find a line with same or less indentation than the block start, it's the end
+            if indent <= block_indent:
+                end_line = i - 1  # The line before this one was the last in the block
+                break
+        
+        return start_line, end_line
     
     try:
         # Find all files recursively
         for root, _, files in os.walk(base_path):
             for filename in files:
+                if total_matches >= max_results:
+                    break
+                    
                 full_path = os.path.join(root, filename)
                 rel_path = os.path.relpath(full_path, base_path)
                 
@@ -122,32 +252,56 @@ def search_code(search_term: str, file_pattern: str = "**/*"):
                     if os.path.getsize(full_path) > 10 * 1024 * 1024:  # 10MB
                         continue
                         
-                    # Try to read the file
-                    with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
+                    # Determine language type for block detection
+                    lang_type = detect_language(filename)
                     
-                    # Simple case-insensitive search
-                    if search_term.lower() in content.lower():
-                        # If found, read line by line to get line numbers
-                        matches = []
-                        with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
-                            for i, line in enumerate(f):
-                                if search_term.lower() in line.lower():
-                                    matches.append({
-                                        "lineNumber": i + 1,
-                                        "content": line.rstrip('\r\n')
-                                    })
-                        
-                        if matches:
-                            results.append({
-                                "file": rel_path,
-                                "matches": matches,
-                                "matchCount": len(matches)
-                            })
-                            total_matches += len(matches)
+                    # Read the file line by line
+                    with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
+                        lines = f.readlines()
+                    
+                    file_matches = []
+                    
+                    # Search each line
+                    for i, line in enumerate(lines):
+                        if (case_sensitive and search_term in line) or \
+                           (not case_sensitive and search_term.lower() in line.lower()):
+                            
+                            # Always include the line info
+                            match_info = {
+                                "lineNumber": i + 1,
+                                "content": line.rstrip('\r\n')
+                            }
+                            
+                            # Always include block boundaries
+                            if lang_type == 'indentation':
+                                start_idx, end_idx = find_indentation_block(lines, i)
+                            else:
+                                start_idx, end_idx = find_brace_block(lines, i)
+                            
+                            match_info["blockStart"] = start_idx + 1  # 1-indexed
+                            match_info["blockEnd"] = end_idx + 1      # 1-indexed
+                            match_info["language"] = lang_type
+                            match_info["blockLines"] = end_idx - start_idx + 1
+                            
+                            # Only include the full block content if requested
+                            if include_block_content:
+                                block_lines = lines[start_idx:end_idx+1]
+                                match_info["blockContent"] = "".join(l.rstrip('\r\n') + '\n' for l in block_lines)
+                            
+                            file_matches.append(match_info)
+                            total_matches += 1
+                            
+                            if total_matches >= max_results:
+                                break
+                    
+                    if file_matches:
+                        results.append({
+                            "file": rel_path,
+                            "matches": file_matches,
+                            "matchCount": len(file_matches)
+                        })
                 
                 except Exception as e:
-                    debug_info["errors"].append(f"Error with {rel_path}: {str(e)}")
                     continue
         
         return {
@@ -155,13 +309,15 @@ def search_code(search_term: str, file_pattern: str = "**/*"):
             "totalMatches": total_matches,
             "filesChecked": files_checked,
             "searchTerm": search_term,
-            "debug": debug_info
+            "options": {
+                "caseSensitive": case_sensitive,
+                "includeBlockContent": include_block_content
+            }
         }
         
     except Exception as e:
         return {
-            "error": f"Error searching codebase: {str(e)}",
-            "debug": debug_info
+            "error": f"Error searching codebase: {str(e)}"
         }
 
 @mcp.tool()
