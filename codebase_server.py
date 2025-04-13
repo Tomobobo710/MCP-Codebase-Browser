@@ -538,19 +538,20 @@ def read_lines(file_path: str, start_line: int = None, end_line: int = None):
         return {"error": f"Error reading lines: {str(e)}"}
 
 @mcp.tool()
-def edit_lines(file_path: str, start_line: int, end_line: int = None, new_content: str = None, mode: str = "replace"):
+def edit_lines(file_path: str, start_line: int = None, end_line: int = None, new_content: str = None, mode: str = "replace"):
     """
     Edit line(s) in a file with several operation modes
     
     Parameters:
     - file_path: Path to the file relative to the codebase
-    - start_line: First line to edit (1-indexed)
+    - start_line: First line to edit (1-indexed), optional for append mode
     - end_line: Last line to edit (inclusive, 1-indexed), only needed for replace/delete modes
-    - new_content: New content to write (required for replace/insert modes)
-    - mode: Operation mode - "replace", "insert", or "delete"
+    - new_content: New content to write (required for replace/insert/append modes)
+    - mode: Operation mode - "replace", "insert", "delete", or "append"
       - replace: Replace lines from start_line to end_line with new_content
       - insert: Insert new_content at start_line (end_line is ignored)
       - delete: Delete lines from start_line to end_line (new_content is ignored)
+      - append: Add new_content to the end of the file (start_line and end_line are ignored)
     """
     full_path = Path(CODEBASE_PATH) / file_path
     
@@ -559,82 +560,115 @@ def edit_lines(file_path: str, start_line: int, end_line: int = None, new_conten
             return {"error": "File not found"}
         
         # Validate parameters based on mode
-        if mode not in ["replace", "insert", "delete"]:
-            return {"error": f"Invalid mode: {mode}. Must be 'replace', 'insert', or 'delete'"}
+        valid_modes = ["replace", "insert", "delete", "append"]
+        if mode not in valid_modes:
+            return {"error": f"Invalid mode: {mode}. Must be one of: {', '.join(valid_modes)}"}
         
-        if mode in ["replace", "insert"] and new_content is None:
+        # Validate parameters for each mode
+        if mode in ["replace", "insert", "append"] and new_content is None:
             return {"error": f"New content must be provided for {mode} mode"}
+        
+        if mode != "append" and start_line is None:
+            return {"error": f"Start line must be provided for {mode} mode"}
         
         if mode in ["replace", "delete"] and end_line is None:
             end_line = start_line  # Default to single line operation
         
-        # Read the file
+        # Read the file as binary first to determine the line ending type
+        with open(full_path, 'rb') as f:
+            binary_content = f.read()
+            
+        # Detect line ending
+        if b'\r\n' in binary_content:
+            line_ending = '\r\n'  # Windows
+        else:
+            line_ending = '\n'    # Unix/Mac
+        
+        # Read the file as text
         with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
-            lines = f.readlines()
-        
-        # Validate line numbers
-        file_length = len(lines)
-        if start_line < 1:
-            start_line = 1
-        
-        # Adjust for 0-based indexing
-        start_idx = start_line - 1
-        
-        # Perform the requested operation
-        if mode == "replace":
-            if end_line > file_length:
-                end_line = file_length
-            if start_line > end_line:
-                return {"error": "Start line cannot be greater than end line"}
+            original_content = f.read()
             
-            end_idx = end_line - 1
+        # For append mode, simply add to the end of the file
+        if mode == "append":
+            # Ensure new_content has proper line ending
+            normalized_content = new_content
+            if normalized_content and not normalized_content.endswith(line_ending):
+                normalized_content += line_ending
+                
+            # Write the combined content
+            updated_content = original_content
+            if updated_content and not updated_content.endswith(line_ending):
+                updated_content += line_ending
+                
+            updated_content += normalized_content
+            operation_desc = "Appended to file"
             
-            # Convert new_content to a list of lines with proper line endings
-            if not new_content.endswith('\n'):
-                new_content += '\n'
-            new_lines = new_content.splitlines(True)
+        else:
+            # Split content into lines with line numbers
+            lines = original_content.splitlines(False)  # Don't keep line endings
             
-            # Replace the specified lines
-            updated_lines = lines[:start_idx] + new_lines + lines[end_idx + 1:]
+            # Validate line numbers
+            file_length = len(lines)
             
-            operation_desc = f"Replaced lines {start_line}-{end_line}"
+            if start_line < 1:
+                start_line = 1
+                
+            if mode in ["replace", "delete"]:
+                if end_line > file_length:
+                    end_line = file_length
+                if start_line > end_line:
+                    return {"error": "Start line cannot be greater than end line"}
             
-        elif mode == "insert":
-            # Convert new_content to a list of lines with proper line endings
-            if not new_content.endswith('\n'):
-                new_content += '\n'
-            new_lines = new_content.splitlines(True)
+            # Adjust for 0-based indexing
+            start_idx = start_line - 1
             
-            # Handle insertion at the end of the file
-            if start_idx > file_length:
-                start_idx = file_length
-            
-            # Insert the new content
-            updated_lines = lines[:start_idx] + new_lines + lines[start_idx:]
-            
-            operation_desc = f"Inserted at line {start_line}"
-            
-        elif mode == "delete":
-            if end_line > file_length:
-                end_line = file_length
-            if start_line > end_line:
-                return {"error": "Start line cannot be greater than end line"}
-            
-            end_idx = end_line - 1
-            
-            # Delete the specified lines
-            updated_lines = lines[:start_idx] + lines[end_idx + 1:]
-            
-            operation_desc = f"Deleted lines {start_line}-{end_line}"
-        
+            if mode == "replace":
+                end_idx = end_line - 1
+                
+                # Replace the lines
+                updated_lines = lines.copy()
+                updated_lines[start_idx:end_idx+1] = new_content.splitlines(False)
+                
+                # Join with the correct line endings
+                updated_content = line_ending.join(updated_lines)
+                operation_desc = f"Replaced lines {start_line}-{end_line}"
+                
+            elif mode == "insert":
+                # Handle insertion at the end of the file
+                if start_idx > file_length:
+                    start_idx = file_length
+                
+                # Insert the new content
+                updated_lines = lines.copy()
+                insert_lines = new_content.splitlines(False)
+                updated_lines[start_idx:start_idx] = insert_lines
+                
+                # Join with the correct line endings
+                updated_content = line_ending.join(updated_lines)
+                operation_desc = f"Inserted at line {start_line}"
+                
+            elif mode == "delete":
+                end_idx = end_line - 1
+                
+                # Delete the specified lines
+                updated_lines = lines.copy()
+                del updated_lines[start_idx:end_idx+1]
+                
+                # Join with the correct line endings
+                updated_content = line_ending.join(updated_lines)
+                operation_desc = f"Deleted lines {start_line}-{end_line}"
+                
         # Write the updated content back to the file
-        with open(full_path, 'w', encoding='utf-8') as f:
-            f.writelines(updated_lines)
+        with open(full_path, 'w', encoding='utf-8', newline='') as f:
+            f.write(updated_content)
+        
+        # Count final lines
+        final_line_count = len(updated_content.splitlines())
         
         return {
             "success": True,
             "message": f"{operation_desc} in {file_path}",
-            "newLineCount": len(updated_lines)
+            "newLineCount": final_line_count
         }
     except Exception as e:
         return {"error": f"Error editing lines: {str(e)}"}
