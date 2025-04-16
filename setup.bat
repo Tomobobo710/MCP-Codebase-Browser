@@ -43,7 +43,7 @@ if exist "mcp_env" (
 
 echo [2/4] Installing dependencies...
 call mcp_env\Scripts\activate.bat
-pip install mcp pathlib glob2
+pip install mcp pathlib glob2 diff_match_patch
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Failed to install dependencies.
     pause
