@@ -8,12 +8,21 @@ from pathlib import Path
 import glob
 import traceback
 from diff_match_patch import diff_match_patch
+import json
 
 # Auto-detect CODEBASE_PATH relative to script location
 CODEBASE_PATH = None  # Automatically determined relative to script
 
+# Maximum result size in characters (serialized JSON)
+MAX_RESULT_SIZE = 99000
+
 def get_codebase_path():
-    """Automatically determine the codebase path based on script location"""
+    """
+    Automatically determine the codebase path based on script location.
+    
+    Returns:
+        str: The absolute path to the Project directory.
+    """
     script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
     project_dir = script_dir / "Project"
     
@@ -35,84 +44,388 @@ if CODEBASE_PATH is None:
 # Create an MCP server
 mcp = FastMCP("MCP Codebase Browser")
 
+# Global in-memory chunk storage
+_memory_chunks = {}
+
+def check_result_size(result):
+    """
+    Check if the result is too large and return a warning message if it is.
+    
+    Args:
+        result (dict): The result to check
+        
+    Returns:
+        dict: The original result if it's not too large, or a warning message if it is.
+    """
+    # Serialize the result to JSON to get its approximate size
+    result_json = json.dumps(result)
+    result_size = len(result_json)
+    
+    # If the result is too large, return a warning message instead
+    if result_size > MAX_RESULT_SIZE:
+        op_type = result.get("operation_type", "operation")
+        
+        # Try to extract relevant metadata about what was being requested
+        path = result.get("path", "")
+        count = result.get("count", 0)
+        
+        detail = ""
+        if path:
+            detail += f" for '{path}'"
+        if count:
+            detail += f" ({count} items)"
+            
+        return {
+            "error": f"Result too large ({result_size} characters)",
+            "message": f"The {op_type} result{detail} exceeds the size limit of {MAX_RESULT_SIZE} characters. Try a more specific operation or request fewer items.",
+            "suggestions": [
+                "Use more specific paths",
+                "Filter results with patterns",
+                "Request fewer lines (use start_line and end_line)",
+                "Use search with more specific terms",
+                "Break your task into smaller operations"
+            ]
+        }
+    
+    return result
+
 @mcp.tool()
 def codebase_browser(operation: str, path: str = None, options: dict = None):
     """
-    All-in-one codebase browser tool
+    All-in-one codebase browser tool for file management, editing, searching, and more.
     
     Parameters:
-    - operation: Operation to perform - one of:
-      * File operations: "read", "write", "append", "delete", "move", "copy", "list", "mkdir", "rmdir"
-      * Edit operations: "edit"
-      * Search operations: "search"
-      * Backup operations: "backup_create", "backup_list", "backup_restore"
+    - operation: (Required) Operation to perform, one of the following groups:
     
-    - path: File or directory path to operate on (not needed for some operations)
+      1. FILE OPERATIONS: 
+         - "read": Read file content (requires path)
+         - "write": Write content to a file (requires path)
+         - "append": Append content to a file (requires path)
+         - "delete": Delete a file (requires path)
+         - "move": Move a file or directory (requires path and destination)
+         - "copy": Copy a file or directory (requires path and destination)
+         - "list": List directory contents (requires path)
+         - "mkdir": Create a directory (requires path)
+         - "rmdir": Remove a directory (requires path)
+      
+      2. EDIT OPERATIONS:
+         - "edit": Edit file content (requires path)
+      
+      3. SEARCH OPERATIONS:
+         - "search": Search for content in files (requires search_term)
+      
+      4. BACKUP OPERATIONS:
+         - "backup_create": Create a backup of the codebase (path not required)
+         - "backup_list": List available backups (path not required)
+         - "backup_restore": Restore from a backup (path not required, requires name)
+      
+      5. CHUNK OPERATIONS:
+         - "chunk_create": Create an in-memory chunk (path not required)
+         - "chunk_update": Update an in-memory chunk (path not required)
+         - "chunk_list": List available chunks (path not required)
+         - "chunk_merge": Merge chunks into a file (requires path)
+         - "chunk_clear": Clear all chunks (path not required)
     
-    - options: Additional options based on operation:
-      * File operations:
-        - write/append: {"content": "text to write"}
-        - move/copy: {"destination": "new/path", "overwrite": bool}
-        - rmdir: {"recursive": bool}
-        - list: {"pattern": "**/*.js"} 
-        - read: {"format": "text"/"lines", "start_line": int, "end_line": int}
+    - path: (Required for most operations) File or directory path to operate on
+           Paths are relative to the codebase root directory
+    
+    - options: (Optional) Additional parameters for specific operations:
+    
+      1. FILE OPERATIONS:
+         - read: {
+             "format": "text" or "lines" (Optional, default: "text"),
+             "start_line": int (Optional, specifying line numbers will automatically use "lines" format),
+             "end_line": int (Optional, defaults to start_line+1 if start_line is provided)
+           }
+         - write: {
+             "content": str (Required, text to write to the file)
+           }
+         - append: {
+             "content": str (Required, text to append to the file)
+           }
+         - move: {
+             "destination": str (Required, destination path),
+             "overwrite": bool (Optional, default: False)
+           }
+         - copy: {
+             "destination": str (Required, destination path),
+             "overwrite": bool (Optional, default: False)
+           }
+         - list: {
+             "pattern": str (Optional, glob pattern for filtering, default: "**/*")
+           }
+         - rmdir: {
+             "recursive": bool (Optional, whether to remove non-empty directories, default: False)
+           }
       
-      * Edit operations:
-        - edit: {
-            "operations": [
-              {
-                "mode": "replace",
-                "find": "text to find",
-                "replace": "replacement text",
-                "occurrence": 1
-              },
-              ...
-            ],
-            "new_content": "alternative complete replacement for file"
-          }
+      2. EDIT OPERATIONS:
+         - edit: (Use either operations or new_content, not both)
+           {
+             "operations": [ (Optional list of edit operations)
+               {
+                 "mode": str (Required, one of: "replace", "insert_after", "insert_before", "append", "prepend"),
+                 "find": str (Required for replace/insert modes, text to find),
+                 "replace": str (Required for replace mode, replacement text),
+                 "content": str (Required for insert/append/prepend modes, content to insert),
+                 "occurrence": int (Optional, which occurrence to modify, default: 1)
+               },
+               ...
+             ],
+             "new_content": str (Optional, complete replacement for file content. If provided, operations are ignored)
+           }
       
-      * Search operations:
-        - search: {
-            "search_term": "text to search for",
-            "file_pattern": "**/*.js", 
-            "case_sensitive": bool,
-            "include_block_content": bool,
-            "max_results": int
-          }
+      3. SEARCH OPERATIONS:
+         - search: {
+             "search_term": str (Required, text to search for),
+             "file_pattern": str (Optional, glob pattern for filtering files, default: "**/*"),
+             "case_sensitive": bool (Optional, whether search is case-sensitive, default: False),
+             "max_results": int (Optional, maximum number of total matches to find, default: 100),
+             "max_display_results": int (Optional, maximum number of code blocks to display, default: 5)
+           }
       
-      * Backup operations:
-        - backup_create: {"name": "optional_custom_name"}
-        - backup_list: {}
-        - backup_restore: {"name": "backup_name"}
+      4. BACKUP OPERATIONS:
+         - backup_create: {
+             "name": str (Optional, custom name for the backup, default: timestamp-based name)
+           }
+         - backup_list: {} (No additional options required)
+         - backup_restore: {
+             "name": str (Required, name of the backup to restore)
+           }
+      
+      5. CHUNK OPERATIONS:
+         - chunk_create: {
+             "chunk_name": str (Optional, name for the chunk, default: timestamp-based name),
+             "content": str (Required, content for the chunk)
+           }
+         - chunk_update: {
+             "chunk_name": str (Required, name of the chunk to update),
+             "content": str (Required, new content for the chunk)
+           }
+         - chunk_list: {} (No additional options required)
+         - chunk_merge: {
+             "chunk_names": list[str] (Required, list of chunk names to merge),
+             "mode": str (Optional, "create" or "append", default: "create")
+           }
+         - chunk_clear: {} (No additional options required)
+    
+    Returns:
+        dict: Response varies by operation, but typically includes:
+              - For successful operations: {"success": True, ...relevant data...}
+              - For unsuccessful operations: {"error": "Error message"}
+              - For read operations: {"content": str} or {"lines": list[dict]}
+              - For list operations: {"files": list[str], "directories": list[str]}
+              - For search operations: {"blocks": list[dict], "totalMatches": int, "filesWithMatches": int, ...}
+              - For backup/chunk operations: Operation-specific status and data
     """
     options = options or {}
     
+    # Track what operation is being performed for error messages
+    result_metadata = {"operation_type": operation, "path": path}
+    
     # GROUP 1: FILE OPERATIONS
     if operation in ["read", "write", "append", "delete", "move", "copy", "list", "mkdir", "rmdir"]:
-        return _handle_file_operations(operation, path, options)
+        result = _handle_file_operations(operation, path, options)
+        result.update(result_metadata)
+        return check_result_size(result)
     
     # GROUP 2: EDIT OPERATIONS
     elif operation == "edit":
-        return _handle_edit_operations(path, options)
+        result = _handle_edit_operations(path, options)
+        result.update(result_metadata)
+        return check_result_size(result)
     
     # GROUP 3: SEARCH OPERATIONS
     elif operation == "search":
-        return _handle_search_operations(options)
+        result = _handle_search_operations(options)
+        result.update(result_metadata)
+        return check_result_size(result)
     
     # GROUP 4: BACKUP OPERATIONS
     elif operation in ["backup_create", "backup_list", "backup_restore"]:
-        return _handle_backup_operations(operation.replace("backup_", ""), options)
+        result = _handle_backup_operations(operation.replace("backup_", ""), options)
+        result.update(result_metadata)
+        return check_result_size(result)
+    
+    # GROUP 5: CHUNK OPERATIONS
+    elif operation in ["chunk_create", "chunk_update", "chunk_list", "chunk_merge", "chunk_clear"]:
+        result = _handle_chunk_operations(operation.replace("chunk_", ""), options)
+        result.update(result_metadata)
+        return check_result_size(result)
     
     else:
-        return {"error": f"Unknown operation: {operation}"}
+        return {"error": f"Unknown operation: {operation}. See documentation for valid operations."}
+
+
+def _handle_chunk_operations(operation, options):
+    """
+    Handle chunk-based file writing operations with in-memory storage.
+    
+    Args:
+        operation (str): The chunk operation to perform.
+        options (dict): Additional options for the operation.
+        
+    Returns:
+        dict: Operation result.
+    """
+    global _memory_chunks
+    
+    # Create backup directory for archival purposes
+    script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+    chunks_dir = script_dir / "Backups" / "Chunks"
+    if not chunks_dir.exists():
+        chunks_dir.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        # Get current timestamp for file naming
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        if operation == "create":
+            # Create a new chunk with specified content
+            chunk_name = options.get("chunk_name")
+            content = options.get("content")
+            
+            if content is None:
+                return {"error": "content is required for chunk_create operation"}
+            
+            if not chunk_name:
+                # Generate a name if none provided
+                chunk_name = f"chunk_{timestamp}"
+            
+            # Store in memory
+            _memory_chunks[chunk_name] = content
+            
+            # Create a timestamped backup filename
+            backup_filename = f"{chunk_name}_{timestamp}.txt"
+            chunk_path = chunks_dir / backup_filename
+            
+            # Save to disk as backup
+            with open(chunk_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+                
+            return {
+                "success": True,
+                "chunk_name": chunk_name,
+                "backup_file": backup_filename,
+                "message": f"Chunk created and stored in memory (backup saved as {backup_filename})"
+            }
+        
+        elif operation == "update":
+            # Update an existing chunk
+            chunk_name = options.get("chunk_name")
+            content = options.get("content")
+            
+            if not chunk_name:
+                return {"error": "chunk_name is required for chunk_update operation"}
+            
+            if content is None:
+                return {"error": "content is required for chunk_update operation"}
+            
+            if chunk_name not in _memory_chunks:
+                return {"error": f"Chunk '{chunk_name}' not found in memory"}
+            
+            # Update in memory
+            _memory_chunks[chunk_name] = content
+            
+            # Create a timestamped backup filename for the update
+            backup_filename = f"{chunk_name}_{timestamp}_updated.txt"
+            chunk_path = chunks_dir / backup_filename
+            
+            # Save to disk as backup
+            with open(chunk_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+                
+            return {
+                "success": True,
+                "backup_file": backup_filename,
+                "message": f"Chunk '{chunk_name}' updated in memory (backup saved as {backup_filename})"
+            }
+        
+        elif operation == "list":
+            # List all available chunks from memory
+            return {
+                "chunks": list(_memory_chunks.keys()),
+                "count": len(_memory_chunks)
+            }
+        
+        elif operation == "merge":
+            # Merge specified chunks into a file
+            target_path = options.get("path")
+            chunk_names = options.get("chunk_names", [])
+            merge_mode = options.get("mode", "create")  # create, append
+            
+            if not target_path:
+                return {"error": "path is required for chunk_merge operation"}
+                
+            if not chunk_names:
+                return {"error": "chunk_names list is required for chunk_merge operation"}
+            
+            # Validate all chunks exist in memory
+            missing_chunks = [name for name in chunk_names if name not in _memory_chunks]
+            
+            if missing_chunks:
+                return {"error": f"Chunks not found in memory: {', '.join(missing_chunks)}"}
+            
+            # Determine output file path
+            full_path = Path(CODEBASE_PATH) / target_path
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Merge the chunks from memory
+            mode = 'w' if merge_mode == 'create' else 'a'
+            with open(full_path, mode, encoding='utf-8') as outfile:
+                for name in chunk_names:
+                    outfile.write(_memory_chunks[name])
+            
+            # Also create a backup of the merged content
+            merged_content = "".join(_memory_chunks[name] for name in chunk_names)
+            backup_filename = f"merged_{Path(target_path).stem}_{timestamp}.txt"
+            backup_path = chunks_dir / backup_filename
+            
+            with open(backup_path, 'w', encoding='utf-8') as f:
+                f.write(merged_content)
+            
+            return {
+                "success": True,
+                "message": f"Merged {len(chunk_names)} chunks into {target_path}",
+                "path": target_path,
+                "chunks_used": chunk_names,
+                "backup_file": backup_filename
+            }
+        
+        elif operation == "clear":
+            # Clear all chunks from memory
+            chunk_count = len(_memory_chunks)
+            _memory_chunks.clear()
+            
+            return {
+                "success": True,
+                "message": f"Cleared {chunk_count} chunks from memory"
+            }
+        
+        else:
+            return {"error": f"Unknown chunk operation: {operation}"}
+            
+    except Exception as e:
+        return {"error": f"Error during chunk_{operation}: {str(e)}"}
 
 
 def _handle_file_operations(operation, path, options):
-    """Handle all file system operations"""
-    if path is None:
+    """
+    Handle all file system operations.
+    
+    Args:
+        operation (str): The file operation to perform.
+        path (str): File or directory path to operate on.
+        options (dict): Additional options for the operation.
+        
+    Returns:
+        dict: Operation result.
+    """
+    if path is None and operation not in ["backup_create", "backup_list", "backup_restore"]:
         return {"error": "Path is required for file operations"}
         
-    full_path = Path(CODEBASE_PATH) / path
+    if path:
+        full_path = Path(CODEBASE_PATH) / path
     
     try:
         # LIST DIRECTORY
@@ -146,39 +459,87 @@ def _handle_file_operations(operation, path, options):
             start_line = options.get("start_line")
             end_line = options.get("end_line")
             
+            # Auto-switch to lines format if line filtering is requested
+            if start_line is not None and format == "text":
+                format = "lines"
+            
             with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
                 
-            if format == "lines":
+            # Check file size before processing - if it's too large, return early
+            if len(content) > MAX_RESULT_SIZE:
+                content_length = len(content)
+                line_count = content.count('\n') + 1
+                
+                # If no line filtering is requested but the file is too large, 
+                # provide guidance on using line filtering
+                if start_line is None:
+                    return {
+                        "error": "File too large",
+                        "message": f"The file ({path}) is {content_length} characters long with {line_count} lines, which exceeds the size limit. Use 'start_line' and 'end_line' to read specific portions.",
+                        "file_size": content_length,
+                        "line_count": line_count,
+                        "max_size": MAX_RESULT_SIZE
+                    }
+                
+            # Split content into lines for both formats if line filtering is requested
+            if start_line is not None:
                 lines = content.splitlines(True)
-                structured_lines = []
+                start_idx = max(0, start_line - 1)
+                end_idx = end_line if end_line is not None else start_idx + 1
                 
-                # Handle line selection if specified
-                if start_line is not None:
-                    start_idx = max(0, start_line - 1)
-                    end_idx = end_line if end_line is not None else start_idx + 1
-                    lines = lines[start_idx:end_idx]
+                # Apply line filtering
+                filtered_lines = lines[start_idx:end_idx]
                 
-                for i, line in enumerate(lines):
-                    line_number = start_line + i if start_line is not None else i + 1
-                    structured_lines.append({
-                        "lineNo": line_number,
-                        "content": line
-                    })
-                    
-                return {
-                    "lines": structured_lines,
-                    "count": len(structured_lines)
-                }
+                if format == "lines":
+                    # Return structured line objects
+                    structured_lines = []
+                    for i, line in enumerate(filtered_lines):
+                        structured_lines.append({
+                            "lineNo": start_line + i,
+                            "content": line
+                        })
+                        
+                    return {
+                        "lines": structured_lines,
+                        "count": len(structured_lines)
+                    }
+                else:
+                    # Return filtered text content
+                    filtered_content = "".join(filtered_lines)
+                    return {
+                        "content": filtered_content,
+                        "count": filtered_content.count('\n') + 1
+                    }
             else:
-                return {
-                    "content": content,
-                    "count": content.count('\n') + 1
-                }
+                # No line filtering requested
+                if format == "lines":
+                    # Return all lines in structured format
+                    structured_lines = []
+                    lines = content.splitlines(True)
+                    for i, line in enumerate(lines):
+                        structured_lines.append({
+                            "lineNo": i + 1,
+                            "content": line
+                        })
+                        
+                    return {
+                        "lines": structured_lines,
+                        "count": len(structured_lines)
+                    }
+                else:
+                    # Return complete content
+                    return {
+                        "content": content,
+                        "count": content.count('\n') + 1
+                    }
                 
         # WRITE FILE
         elif operation == "write":
-            content = options.get("content", "")
+            content = options.get("content")
+            if content is None:
+                return {"error": "content is required for write operation"}
+                
             full_path.parent.mkdir(parents=True, exist_ok=True)
             
             with open(full_path, 'w', encoding='utf-8') as f:
@@ -188,7 +549,10 @@ def _handle_file_operations(operation, path, options):
             
         # APPEND TO FILE
         elif operation == "append":
-            content = options.get("content", "")
+            content = options.get("content")
+            if content is None:
+                return {"error": "content is required for append operation"}
+                
             full_path.parent.mkdir(parents=True, exist_ok=True)
             
             with open(full_path, 'a', encoding='utf-8') as f:
@@ -225,7 +589,10 @@ def _handle_file_operations(operation, path, options):
             if recursive:
                 shutil.rmtree(full_path)
             else:
-                os.rmdir(full_path)  # Will only work if directory is empty
+                try:
+                    os.rmdir(full_path)  # Will only work if directory is empty
+                except OSError as e:
+                    return {"error": "Directory is not empty. Use recursive=True to remove non-empty directories."}
                 
             return {"success": True}
             
@@ -233,7 +600,7 @@ def _handle_file_operations(operation, path, options):
         elif operation == "move":
             destination = options.get("destination")
             if not destination:
-                return {"error": "Destination path is required"}
+                return {"error": "destination is required for move operation"}
                 
             dest_path = Path(CODEBASE_PATH) / destination
             
@@ -255,7 +622,7 @@ def _handle_file_operations(operation, path, options):
         elif operation == "copy":
             destination = options.get("destination")
             if not destination:
-                return {"error": "Destination path is required"}
+                return {"error": "destination is required for copy operation"}
                 
             dest_path = Path(CODEBASE_PATH) / destination
             
@@ -277,11 +644,20 @@ def _handle_file_operations(operation, path, options):
             return {"success": True}
         
     except Exception as e:
-        return {"error": f"{str(e)}"}
+        return {"error": f"Error during file operation: {str(e)}"}
 
 
 def _handle_edit_operations(path, options):
-    """Handle file editing operations"""
+    """
+    Handle file editing operations.
+    
+    Args:
+        path (str): Path to the file to edit.
+        options (dict): Edit options including operations or new_content.
+        
+    Returns:
+        dict: Edit operation result.
+    """
     if path is None:
         return {"error": "Path is required for edit operations"}
         
@@ -292,9 +668,12 @@ def _handle_edit_operations(path, options):
     try:
         # Handle full file replacement
         if new_content is not None:
+            # Create parent directories if they don't exist
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(new_content)
-            return {"success": True}
+            return {"success": True, "message": "File content replaced"}
             
         # Check if file exists
         if not full_path.exists():
@@ -413,27 +792,36 @@ def _handle_edit_operations(path, options):
         with open(full_path, 'w', encoding='utf-8') as f:
             f.write(modified_content)
             
-        return {"success": True, "count": applied_operations}
+        return {"success": True, "operations_applied": applied_operations}
             
     except Exception as e:
-        return {"error": f"{str(e)}"}
+        return {"error": f"Error during edit operation: {str(e)}"}
 
 
 def _handle_search_operations(options):
-    """Handle code search operations with smart block detection"""
+    """
+    Handle code search operations with smart block detection.
+    
+    Args:
+        options (dict): Search parameters.
+        
+    Returns:
+        dict: Search results - showing exactly 5 individual code blocks as results.
+    """
     search_term = options.get("search_term", "")
     file_pattern = options.get("file_pattern", "**/*")
     case_sensitive = options.get("case_sensitive", False)
-    include_block_content = options.get("include_block_content", False)
-    max_results = options.get("max_results", 100)
-    max_display_results = options.get("max_display_results", 5)  # New parameter for display limit
+    include_block_content = options.get("include_block_content", True)  # Always include block content
+    max_results = options.get("max_results", 100)  # Still collect up to 100 for total count
+    max_display_blocks = options.get("max_display_results", 5)  # Show 5 individual blocks max
     
     if not search_term:
-        return {"error": "Search term is required"}
+        return {"error": "search_term is required for search operation"}
     
-    results = []
+    all_blocks = []  # Flat list of all code blocks found
     total_matches = 0
     files_checked = 0
+    files_with_matches = 0
     base_path = Path(CODEBASE_PATH)
     
     def detect_language(filename):
@@ -589,17 +977,21 @@ def _handle_search_operations(options):
                     with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
                         lines = f.readlines()
                     
-                    file_matches = []
+                    file_has_matches = False
                     
                     # Search each line
                     for i, line in enumerate(lines):
                         if (case_sensitive and search_term in line) or \
                            (not case_sensitive and search_term.lower() in line.lower()):
                             
+                            file_has_matches = True
+                            
                             # Always include the line info
                             match_info = {
                                 "lineNumber": i + 1,
-                                "content": line.rstrip('\r\n')
+                                "matchLine": line.rstrip('\r\n'),
+                                "file": rel_path,
+                                "matchPosition": line.lower().find(search_term.lower()) if not case_sensitive else line.find(search_term)
                             }
                             
                             # Always include block boundaries
@@ -613,47 +1005,51 @@ def _handle_search_operations(options):
                             match_info["language"] = lang_type
                             match_info["blockLines"] = end_idx - start_idx + 1
                             
-                            # Only include the full block content if requested
-                            if include_block_content:
-                                block_lines = lines[start_idx:end_idx+1]
-                                match_info["blockContent"] = "".join(l.rstrip('\r\n') + '\n' for l in block_lines)
+                            # Always include the block content
+                            block_lines = lines[start_idx:end_idx+1]
+                            block_content = "".join(l.rstrip('\r\n') + '\n' for l in block_lines)
                             
-                            file_matches.append(match_info)
+                            # Check if block content is too large
+                            if len(block_content) > MAX_RESULT_SIZE / 10:
+                                # Only show a snippet with an ellipsis
+                                snippet_size = 500
+                                match_info["blockContent"] = (
+                                    block_content[:snippet_size] + 
+                                    f"\n... (block truncated, {len(block_content)} characters total) ...\n"
+                                )
+                                match_info["truncated"] = True
+                            else:
+                                match_info["blockContent"] = block_content
+                            
+                            # Add to our flat list of all blocks
+                            all_blocks.append(match_info)
                             total_matches += 1
                             
                             if total_matches >= max_results:
                                 break
                     
-                    if file_matches:
-                        results.append({
-                            "file": rel_path,
-                            "matches": file_matches,
-                            "matchCount": len(file_matches)
-                        })
+                    if file_has_matches:
+                        files_with_matches += 1
                 
                 except Exception as e:
                     continue
         
-        final_results = results
-        truncated = False
-        
-        if len(results) > max_display_results:
-            final_results = results[:max_display_results]
-            truncated = True
+        # Select the top N blocks to display
+        displayed_blocks = all_blocks[:max_display_blocks]
+        truncated = len(all_blocks) > max_display_blocks
         
         return {
-            "results": final_results,
+            "blocks": displayed_blocks,
             "totalMatches": total_matches,
+            "displayedMatches": len(displayed_blocks),
+            "filesWithMatches": files_with_matches,
             "filesChecked": files_checked,
             "searchTerm": search_term,
             "truncated": truncated,
-            "totalFiles": len(results),
-            "displayedFiles": len(final_results),
-            "message": f"Showing {len(final_results)} of {len(results)} files with matches" if truncated else None,
+            "message": f"Found {total_matches} matches in {files_with_matches} files. Showing {len(displayed_blocks)} blocks." if truncated else None,
             "options": {
                 "filePattern": file_pattern,
-                "caseSensitive": case_sensitive,
-                "includeBlockContent": include_block_content
+                "caseSensitive": case_sensitive
             }
         }
         
@@ -662,7 +1058,16 @@ def _handle_search_operations(options):
 
 
 def _handle_backup_operations(operation, options):
-    """Handle backup operations"""
+    """
+    Handle backup operations for the codebase.
+    
+    Args:
+        operation (str): Backup operation to perform (create, list, restore).
+        options (dict): Additional options for the operation.
+        
+    Returns:
+        dict: Operation result.
+    """
     try:
         # Determine backup directory path
         script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -750,7 +1155,7 @@ def _handle_backup_operations(operation, options):
         elif operation == "restore":
             backup_name = options.get("name")
             if not backup_name:
-                return {"error": "Backup name is required for restore operation"}
+                return {"error": "name is required for backup_restore operation"}
                 
             backup_path = backup_root / backup_name
             
@@ -793,7 +1198,7 @@ def _handle_backup_operations(operation, options):
             return {"error": f"Unknown backup operation: {operation}"}
             
     except Exception as e:
-        return {"error": f"Error during backup {operation}: {str(e)}"}
+        return {"error": f"Error during backup_{operation}: {str(e)}"}
 
 
 # Start the server when script is run directly
