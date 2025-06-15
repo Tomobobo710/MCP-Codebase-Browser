@@ -7,8 +7,7 @@ I've tried a few other MCP tools and I found that they were just overwhelming wi
 
 It's currently not very advanced, but that's kinda the plan is to keep it simple. I've talked to Claude waayy too much and I feel like I know how he ticks, and this tool is created in a way to not go against the grain with Claude's typical behaviors.  
 
-
-![MCP Server](https://private-user-images.githubusercontent.com/64335998/432573576-562915ad-c4d4-4855-9228-5a8c2834f608.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDQzMzgxNDIsIm5iZiI6MTc0NDMzNzg0MiwicGF0aCI6Ii82NDMzNTk5OC80MzI1NzM1NzYtNTYyOTE1YWQtYzRkNC00ODU1LTkyMjgtNWE4YzI4MzRmNjA4LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA0MTElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNDExVDAyMTcyMlomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTRkNzY3ZTkyOTZjMzU4OWMwMzExYTRlMjllYzUwNjUzOTg4MGRlNjMwNjEyNDBiNDU0N2I5N2FlZjFmMTIxMWImWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.sqTQO4Phm3T5vx1-q9IQmx_Yd_5Sfg_tNWoRTLHYpg4)
+![MCP Server](https://github.com/user-attachments/assets/e9b6d97d-e3d4-4f8f-9038-fa4224531e9d)
 
 ## Requirements
 * Windows
@@ -62,8 +61,6 @@ Look for the hammer icon in the bottom right corner of the chat input box
 Claude can now perform various codebase tasks when you ask him to  
 When Claude tries to use a tool, he will ask for permission first  
 
-![Claude will request permission to interact with your codebase](https://private-user-images.githubusercontent.com/64335998/432572069-7752f517-a0f4-40e9-b28c-3e2835e301ad.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDQzMzgxNDIsIm5iZiI6MTc0NDMzNzg0MiwicGF0aCI6Ii82NDMzNTk5OC80MzI1NzIwNjktNzc1MmY1MTctYTBmNC00MGU5LWIyOGMtM2UyODM1ZTMwMWFkLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA0MTElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNDExVDAyMTcyMlomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWRjNzk5ODViZTFiOTg4YTE0ODM5MWUwMDQxYmU5NTM2ZGM1ZDljZjVmN2Q0NGE3MjJlNjNiOTE2OWI2NWI4Y2YmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.05DMlllK2LcU8_VRTu-Mac3yhRlSJyF3SX5maHWJLts)
-
 Consider the following examples:
 
 * "List all files in the project"
@@ -87,7 +84,7 @@ Consider the following examples:
 # WARNING
 This tool will allow Claude to make changes to your files. He will probably break things.
 
-![Uh oh](https://private-user-images.githubusercontent.com/64335998/433124637-d56f79b3-20e2-44a7-8bd9-a10ccc4337f8.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDQ1NDAzMjcsIm5iZiI6MTc0NDU0MDAyNywicGF0aCI6Ii82NDMzNTk5OC80MzMxMjQ2MzctZDU2Zjc5YjMtMjBlMi00NGE3LThiZDktYTEwY2NjNDMzN2Y4LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTA0MTMlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwNDEzVDEwMjcwN1omWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWY1NWJmYzFiMjM1NzhjMDVmYjYwMzE0YTA4ZTdmNjU5YzNmNDExYzE5YWYxNjI0MTliOWE0MGUzYmZhYTQ5Y2YmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.FingsDQG8XXKC350q4G2yFlh3cNwgwDswbFxW0Ofk-U)
+![Uh oh](https://github.com/user-attachments/assets/8064f185-4fdd-43fd-9705-9ce27db07e43)
 
 This project is a WIP, I take no responsibility for this tool losing your data. I recommend asking Claude to make backups often.
 
