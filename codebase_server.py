@@ -7,8 +7,8 @@ from fnmatch import fnmatch
 from pathlib import Path
 import glob
 import traceback
-from diff_match_patch import diff_match_patch
 import json
+from datetime import datetime
 
 # Auto-detect CODEBASE_PATH relative to script location
 CODEBASE_PATH = None  # Automatically determined relative to script
@@ -44,8 +44,68 @@ if CODEBASE_PATH is None:
 # Create an MCP server
 mcp = FastMCP("MCP Codebase Browser")
 
-# Global in-memory chunk storage
-_memory_chunks = {}
+def get_history_path():
+    """Get the path to the history directory and ensure it exists."""
+    script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+    history_dir = script_dir / "History"
+    history_dir.mkdir(exist_ok=True)
+    return history_dir
+
+def get_history_file():
+    """Get the path to the history file and ensure it exists."""
+    history_dir = get_history_path()
+    history_file = history_dir / "commits.json"
+    
+    if not history_file.exists():
+        # Create empty history file
+        with open(history_file, 'w') as f:
+            json.dump([], f)
+    
+    return history_file
+
+def add_commit(operation, path, message):
+    """Add a commit entry to the history file with FIFO management."""
+    try:
+        history_file = get_history_file()
+        
+        # Read existing history
+        with open(history_file, 'r') as f:
+            history = json.load(f)
+        
+        # Create new commit entry
+        commit = {
+            "timestamp": datetime.now().isoformat()[:16],  # Compact: 2023-12-15T14:30
+            "operation": operation,
+            "path": path or "",
+            "message": message
+        }
+        
+        # Add to beginning of list (newest first)
+        history.insert(0, commit)
+        
+        # Keep only last 25 commits (FIFO)
+        history = history[:25]
+        
+        # Write back to file
+        with open(history_file, 'w') as f:
+            json.dump(history, f, indent=2)
+            
+    except Exception as e:
+        # Don't fail operations if history logging fails
+        print(f"Warning: Could not log commit to history: {e}")
+
+def is_file_locked(filepath):
+    """Check if a file is locked by another process."""
+    try:
+        with open(filepath, 'r+'):
+            return False
+    except (PermissionError, OSError):
+        return True
+
+def should_skip_path(path_str):
+    """Check if a path should be skipped (e.g., node_modules)."""
+    path_parts = Path(path_str).parts
+    return 'node_modules' in path_parts
 
 def check_result_size(result):
     """
@@ -90,7 +150,7 @@ def check_result_size(result):
     return result
 
 @mcp.tool()
-def codebase_browser(operation: str, path: str = None, options: dict = None):
+def codebase_browser(operation: str, path: str = None, options: dict = None, message: str = None):
     """
     All-in-one codebase browser tool for file management, editing, searching, and more.
     
@@ -99,17 +159,16 @@ def codebase_browser(operation: str, path: str = None, options: dict = None):
     
       1. FILE OPERATIONS: 
          - "read": Read file content (requires path)
-         - "write": Write content to a file (requires path)
-         - "append": Append content to a file (requires path)
-         - "delete": Delete a file (requires path)
-         - "move": Move a file or directory (requires path and destination)
-         - "copy": Copy a file or directory (requires path and destination)
+         - "write": Write content to a file (requires path and message)
+         - "delete": Delete a file (requires path and message)
+         - "move": Move a file or directory (requires path, destination, and message)
+         - "copy": Copy a file or directory (requires path, destination, and message)
          - "list": List directory contents (requires path)
-         - "mkdir": Create a directory (requires path)
-         - "rmdir": Remove a directory (requires path)
+         - "mkdir": Create a directory (requires path and message)
+         - "rmdir": Remove a directory (requires path and message)
       
       2. EDIT OPERATIONS:
-         - "edit": Edit file content (requires path)
+         - "edit": Edit file content with replace operations (requires path and message)
       
       3. SEARCH OPERATIONS:
          - "search": Search for content in files (requires search_term)
@@ -118,16 +177,18 @@ def codebase_browser(operation: str, path: str = None, options: dict = None):
          - "backup_create": Create a backup of the codebase (path not required)
          - "backup_list": List available backups (path not required)
          - "backup_restore": Restore from a backup (path not required, requires name)
+         - "browse_backup": Browse backup contents READ-ONLY (requires backup name)
       
-      5. CHUNK OPERATIONS:
-         - "chunk_create": Create an in-memory chunk (path not required)
-         - "chunk_update": Update an in-memory chunk (path not required)
-         - "chunk_list": List available chunks (path not required)
-         - "chunk_merge": Merge chunks into a file (requires path)
-         - "chunk_clear": Clear all chunks (path not required)
+      5. HISTORY OPERATIONS:
+         - "read_recent_commits": Read recent commit history (no other parameters needed)
     
     - path: (Required for most operations) File or directory path to operate on
            Paths are relative to the codebase root directory
+    
+    - message: (Required for write operations) Brief description of the change being made
+              Examples: "fixed typo in error message preventing proper user feedback"
+                       "updated function signature in utils.py to accept optional timeout parameter"
+                       "refactored database connection logic to use connection pooling"
     
     - options: (Optional) Additional parameters for specific operations:
     
@@ -139,9 +200,6 @@ def codebase_browser(operation: str, path: str = None, options: dict = None):
            }
          - write: {
              "content": str (Required, text to write to the file)
-           }
-         - append: {
-             "content": str (Required, text to append to the file)
            }
          - move: {
              "destination": str (Required, destination path),
@@ -161,17 +219,31 @@ def codebase_browser(operation: str, path: str = None, options: dict = None):
       2. EDIT OPERATIONS:
          - edit: (Use either operations or new_content, not both)
            {
-             "operations": [ (Optional list of edit operations)
+             "operations": [ (Optional list of replace operations - can batch multiple edits in one call)
                {
-                 "mode": str (Required, one of: "replace", "insert_after", "insert_before", "append", "prepend"),
-                 "find": str (Required for replace/insert modes, text to find),
-                 "replace": str (Required for replace mode, replacement text),
-                 "content": str (Required for insert/append/prepend modes, content to insert),
+                 "mode": "replace" (Required),
+                 "find": str (Required, text to find),
+                 "replace": str (Required, replacement text),
                  "occurrence": int (Optional, which occurrence to modify, default: 1)
                },
-               ...
+               {
+                 "mode": "replace",
+                 "find": str (Another find/replace in the same file),
+                 "replace": str,
+                 "occurrence": int (Optional, default: 1)
+               }
+               ... (can include many operations to batch edits efficiently)
              ],
              "new_content": str (Optional, complete replacement for file content. If provided, operations are ignored)
+           }
+           
+           BATCHING EXAMPLE - Multiple edits in one call:
+           {
+             "operations": [
+               {"mode": "replace", "find": "old_function_name", "replace": "new_function_name"},
+               {"mode": "replace", "find": "TODO: implement", "replace": "# Implemented"},
+               {"mode": "replace", "find": "version = '1.0'", "replace": "version = '1.1'"}
+             ]
            }
       
       3. SEARCH OPERATIONS:
@@ -179,8 +251,8 @@ def codebase_browser(operation: str, path: str = None, options: dict = None):
              "search_term": str (Required, text to search for),
              "file_pattern": str (Optional, glob pattern for filtering files, default: "**/*"),
              "case_sensitive": bool (Optional, whether search is case-sensitive, default: False),
-             "max_results": int (Optional, maximum number of total matches to find, default: 100),
-             "max_display_results": int (Optional, maximum number of code blocks to display, default: 5)
+             "max_results": int (Optional, maximum number of total matches to find, default: 200),
+             "max_display_results": int (Optional, maximum number of matches to display, default: 25)
            }
       
       4. BACKUP OPERATIONS:
@@ -191,22 +263,13 @@ def codebase_browser(operation: str, path: str = None, options: dict = None):
          - backup_restore: {
              "name": str (Required, name of the backup to restore)
            }
+         - browse_backup: {
+             "name": str (Required, name of the backup to browse),
+             "path": str (Optional, specific path within backup to browse, default: root)
+           }
       
-      5. CHUNK OPERATIONS:
-         - chunk_create: {
-             "chunk_name": str (Optional, name for the chunk, default: timestamp-based name),
-             "content": str (Required, content for the chunk)
-           }
-         - chunk_update: {
-             "chunk_name": str (Required, name of the chunk to update),
-             "content": str (Required, new content for the chunk)
-           }
-         - chunk_list: {} (No additional options required)
-         - chunk_merge: {
-             "chunk_names": list[str] (Required, list of chunk names to merge),
-             "mode": str (Optional, "create" or "append", default: "create")
-           }
-         - chunk_clear: {} (No additional options required)
+      5. HISTORY OPERATIONS:
+         - read_recent_commits: {} (No additional options required)
     
     Returns:
         dict: Response varies by operation, but typically includes:
@@ -214,8 +277,9 @@ def codebase_browser(operation: str, path: str = None, options: dict = None):
               - For unsuccessful operations: {"error": "Error message"}
               - For read operations: {"content": str} or {"lines": list[dict]}
               - For list operations: {"files": list[str], "directories": list[str]}
-              - For search operations: {"blocks": list[dict], "totalMatches": int, "filesWithMatches": int, ...}
-              - For backup/chunk operations: Operation-specific status and data
+              - For search operations: {"matches": list[dict], "totalMatches": int, "filesWithMatches": int, ...}
+              - For backup operations: Operation-specific status and data
+              - For history operations: {"commits": list[dict], ...}
     """
     options = options or {}
     
@@ -223,14 +287,14 @@ def codebase_browser(operation: str, path: str = None, options: dict = None):
     result_metadata = {"operation_type": operation, "path": path}
     
     # GROUP 1: FILE OPERATIONS
-    if operation in ["read", "write", "append", "delete", "move", "copy", "list", "mkdir", "rmdir"]:
-        result = _handle_file_operations(operation, path, options)
+    if operation in ["read", "write", "delete", "move", "copy", "list", "mkdir", "rmdir"]:
+        result = _handle_file_operations(operation, path, options, message)
         result.update(result_metadata)
         return check_result_size(result)
     
     # GROUP 2: EDIT OPERATIONS
     elif operation == "edit":
-        result = _handle_edit_operations(path, options)
+        result = _handle_edit_operations(path, options, message)
         result.update(result_metadata)
         return check_result_size(result)
     
@@ -241,14 +305,14 @@ def codebase_browser(operation: str, path: str = None, options: dict = None):
         return check_result_size(result)
     
     # GROUP 4: BACKUP OPERATIONS
-    elif operation in ["backup_create", "backup_list", "backup_restore"]:
+    elif operation in ["backup_create", "backup_list", "backup_restore", "browse_backup"]:
         result = _handle_backup_operations(operation.replace("backup_", ""), options)
         result.update(result_metadata)
         return check_result_size(result)
     
-    # GROUP 5: CHUNK OPERATIONS
-    elif operation in ["chunk_create", "chunk_update", "chunk_list", "chunk_merge", "chunk_clear"]:
-        result = _handle_chunk_operations(operation.replace("chunk_", ""), options)
+    # GROUP 5: HISTORY OPERATIONS
+    elif operation == "read_recent_commits":
+        result = _handle_history_operations()
         result.update(result_metadata)
         return check_result_size(result)
     
@@ -256,160 +320,7 @@ def codebase_browser(operation: str, path: str = None, options: dict = None):
         return {"error": f"Unknown operation: {operation}. See documentation for valid operations."}
 
 
-def _handle_chunk_operations(operation, options):
-    """
-    Handle chunk-based file writing operations with in-memory storage.
-    
-    Args:
-        operation (str): The chunk operation to perform.
-        options (dict): Additional options for the operation.
-        
-    Returns:
-        dict: Operation result.
-    """
-    global _memory_chunks
-    
-    # Create backup directory for archival purposes
-    script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-    chunks_dir = script_dir / "Backups" / "Chunks"
-    if not chunks_dir.exists():
-        chunks_dir.mkdir(parents=True, exist_ok=True)
-    
-    try:
-        # Get current timestamp for file naming
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        if operation == "create":
-            # Create a new chunk with specified content
-            chunk_name = options.get("chunk_name")
-            content = options.get("content")
-            
-            if content is None:
-                return {"error": "content is required for chunk_create operation"}
-            
-            if not chunk_name:
-                # Generate a name if none provided
-                chunk_name = f"chunk_{timestamp}"
-            
-            # Store in memory
-            _memory_chunks[chunk_name] = content
-            
-            # Create a timestamped backup filename
-            backup_filename = f"{chunk_name}_{timestamp}.txt"
-            chunk_path = chunks_dir / backup_filename
-            
-            # Save to disk as backup
-            with open(chunk_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-                
-            return {
-                "success": True,
-                "chunk_name": chunk_name,
-                "backup_file": backup_filename,
-                "message": f"Chunk created and stored in memory (backup saved as {backup_filename})"
-            }
-        
-        elif operation == "update":
-            # Update an existing chunk
-            chunk_name = options.get("chunk_name")
-            content = options.get("content")
-            
-            if not chunk_name:
-                return {"error": "chunk_name is required for chunk_update operation"}
-            
-            if content is None:
-                return {"error": "content is required for chunk_update operation"}
-            
-            if chunk_name not in _memory_chunks:
-                return {"error": f"Chunk '{chunk_name}' not found in memory"}
-            
-            # Update in memory
-            _memory_chunks[chunk_name] = content
-            
-            # Create a timestamped backup filename for the update
-            backup_filename = f"{chunk_name}_{timestamp}_updated.txt"
-            chunk_path = chunks_dir / backup_filename
-            
-            # Save to disk as backup
-            with open(chunk_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-                
-            return {
-                "success": True,
-                "backup_file": backup_filename,
-                "message": f"Chunk '{chunk_name}' updated in memory (backup saved as {backup_filename})"
-            }
-        
-        elif operation == "list":
-            # List all available chunks from memory
-            return {
-                "chunks": list(_memory_chunks.keys()),
-                "count": len(_memory_chunks)
-            }
-        
-        elif operation == "merge":
-            # Merge specified chunks into a file
-            target_path = options.get("path")
-            chunk_names = options.get("chunk_names", [])
-            merge_mode = options.get("mode", "create")  # create, append
-            
-            if not target_path:
-                return {"error": "path is required for chunk_merge operation"}
-                
-            if not chunk_names:
-                return {"error": "chunk_names list is required for chunk_merge operation"}
-            
-            # Validate all chunks exist in memory
-            missing_chunks = [name for name in chunk_names if name not in _memory_chunks]
-            
-            if missing_chunks:
-                return {"error": f"Chunks not found in memory: {', '.join(missing_chunks)}"}
-            
-            # Determine output file path
-            full_path = Path(CODEBASE_PATH) / target_path
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Merge the chunks from memory
-            mode = 'w' if merge_mode == 'create' else 'a'
-            with open(full_path, mode, encoding='utf-8') as outfile:
-                for name in chunk_names:
-                    outfile.write(_memory_chunks[name])
-            
-            # Also create a backup of the merged content
-            merged_content = "".join(_memory_chunks[name] for name in chunk_names)
-            backup_filename = f"merged_{Path(target_path).stem}_{timestamp}.txt"
-            backup_path = chunks_dir / backup_filename
-            
-            with open(backup_path, 'w', encoding='utf-8') as f:
-                f.write(merged_content)
-            
-            return {
-                "success": True,
-                "message": f"Merged {len(chunk_names)} chunks into {target_path}",
-                "path": target_path,
-                "chunks_used": chunk_names,
-                "backup_file": backup_filename
-            }
-        
-        elif operation == "clear":
-            # Clear all chunks from memory
-            chunk_count = len(_memory_chunks)
-            _memory_chunks.clear()
-            
-            return {
-                "success": True,
-                "message": f"Cleared {chunk_count} chunks from memory"
-            }
-        
-        else:
-            return {"error": f"Unknown chunk operation: {operation}"}
-            
-    except Exception as e:
-        return {"error": f"Error during chunk_{operation}: {str(e)}"}
-
-
-def _handle_file_operations(operation, path, options):
+def _handle_file_operations(operation, path, options, message):
     """
     Handle all file system operations.
     
@@ -417,15 +328,20 @@ def _handle_file_operations(operation, path, options):
         operation (str): The file operation to perform.
         path (str): File or directory path to operate on.
         options (dict): Additional options for the operation.
+        message (str): Commit message for write operations.
         
     Returns:
         dict: Operation result.
     """
-    if path is None and operation not in ["backup_create", "backup_list", "backup_restore"]:
+    if path is None:
         return {"error": "Path is required for file operations"}
+    
+    # Check if message is required for write operations
+    write_operations = ["write", "delete", "move", "copy", "mkdir", "rmdir"]
+    if operation in write_operations and not message:
+        return {"error": f"Message parameter is required for {operation} operation. Provide a brief description of the change."}
         
-    if path:
-        full_path = Path(CODEBASE_PATH) / path
+    full_path = Path(CODEBASE_PATH) / path
     
     try:
         # LIST DIRECTORY
@@ -436,13 +352,19 @@ def _handle_file_operations(operation, path, options):
             if not dir_path.exists():
                 return {"error": "Directory not found"}
             
-            # Get files matching pattern
-            files = [str(Path(f).relative_to(dir_path)) 
-                    for f in glob.glob(str(dir_path / pattern), recursive=True) 
-                    if os.path.isfile(f)]
+            # Get files matching pattern, excluding node_modules
+            files = []
+            for f in glob.glob(str(dir_path / pattern), recursive=True):
+                if os.path.isfile(f):
+                    rel_path = str(Path(f).relative_to(dir_path))
+                    if not should_skip_path(rel_path):
+                        files.append(rel_path)
             
-            # Get directories
-            dirs = [d.name + '/' for d in os.scandir(str(dir_path)) if d.is_dir()]
+            # Get directories, excluding node_modules
+            dirs = []
+            for d in os.scandir(str(dir_path)):
+                if d.is_dir() and not should_skip_path(d.name):
+                    dirs.append(d.name + '/')
             
             return {
                 "files": files,
@@ -539,24 +461,22 @@ def _handle_file_operations(operation, path, options):
             content = options.get("content")
             if content is None:
                 return {"error": "content is required for write operation"}
+            
+            # Check if file is locked
+            if full_path.exists() and is_file_locked(str(full_path)):
+                return {
+                    "error": "File is currently open",
+                    "message": f"Cannot write to '{path}' because it appears to be open in another application. Please close the file and try again.",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+                }
                 
             full_path.parent.mkdir(parents=True, exist_ok=True)
             
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
-                
-            return {"success": True}
             
-        # APPEND TO FILE
-        elif operation == "append":
-            content = options.get("content")
-            if content is None:
-                return {"error": "content is required for append operation"}
-                
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(full_path, 'a', encoding='utf-8') as f:
-                f.write(content)
+            # Log to history
+            add_commit(operation, path, message)
                 
             return {"success": True}
             
@@ -565,15 +485,31 @@ def _handle_file_operations(operation, path, options):
             if not full_path.exists():
                 return {"error": "File not found"}
                 
-            if full_path.is_file():
-                os.remove(full_path)
-                return {"success": True}
-            else:
+            if not full_path.is_file():
                 return {"error": "Path is not a file"}
+            
+            # Check if file is locked
+            if is_file_locked(str(full_path)):
+                return {
+                    "error": "File is currently open",
+                    "message": f"Cannot delete '{path}' because it appears to be open in another application. Please close the file and try again.",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+                }
+                
+            os.remove(full_path)
+            
+            # Log to history
+            add_commit(operation, path, message)
+            
+            return {"success": True}
                 
         # MAKE DIRECTORY
         elif operation == "mkdir":
             full_path.mkdir(parents=True, exist_ok=True)
+            
+            # Log to history
+            add_commit(operation, path, message)
+            
             return {"success": True}
             
         # REMOVE DIRECTORY
@@ -586,13 +522,23 @@ def _handle_file_operations(operation, path, options):
                 
             recursive = options.get("recursive", False)
             
-            if recursive:
-                shutil.rmtree(full_path)
-            else:
-                try:
+            try:
+                if recursive:
+                    shutil.rmtree(full_path)
+                else:
                     os.rmdir(full_path)  # Will only work if directory is empty
-                except OSError as e:
+            except OSError as e:
+                if not recursive:
                     return {"error": "Directory is not empty. Use recursive=True to remove non-empty directories."}
+                else:
+                    return {
+                        "error": "Could not remove directory",
+                        "message": f"Directory removal failed: {str(e)}",
+                        "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+                    }
+            
+            # Log to history
+            add_commit(operation, path, message)
                 
             return {"success": True}
             
@@ -611,10 +557,28 @@ def _handle_file_operations(operation, path, options):
             
             if dest_path.exists() and not overwrite:
                 return {"error": "Destination already exists. Set overwrite=True to replace it."}
+            
+            # Check if source file is locked
+            if full_path.is_file() and is_file_locked(str(full_path)):
+                return {
+                    "error": "File is currently open",
+                    "message": f"Cannot move '{path}' because it appears to be open in another application. Please close the file and try again.",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+                }
                 
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             
-            shutil.move(str(full_path), str(dest_path))
+            try:
+                shutil.move(str(full_path), str(dest_path))
+            except OSError as e:
+                return {
+                    "error": "Move operation failed",
+                    "message": f"Could not move '{path}' to '{destination}': {str(e)}",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+                }
+            
+            # Log to history
+            add_commit(operation, f"{path} -> {destination}", message)
             
             return {"success": True}
             
@@ -636,30 +600,47 @@ def _handle_file_operations(operation, path, options):
                 
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             
-            if full_path.is_dir():
-                shutil.copytree(str(full_path), str(dest_path))
-            else:
-                shutil.copy2(str(full_path), str(dest_path))
+            try:
+                if full_path.is_dir():
+                    shutil.copytree(str(full_path), str(dest_path))
+                else:
+                    shutil.copy2(str(full_path), str(dest_path))
+            except OSError as e:
+                return {
+                    "error": "Copy operation failed",
+                    "message": f"Could not copy '{path}' to '{destination}': {str(e)}",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+                }
+            
+            # Log to history
+            add_commit(operation, f"{path} -> {destination}", message)
             
             return {"success": True}
         
     except Exception as e:
-        return {"error": f"Error during file operation: {str(e)}"}
+        return {
+            "error": f"Error during file operation: {str(e)}",
+            "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+        }
 
 
-def _handle_edit_operations(path, options):
+def _handle_edit_operations(path, options, message):
     """
-    Handle file editing operations.
+    Handle file editing operations with simple string replacement.
     
     Args:
         path (str): Path to the file to edit.
         options (dict): Edit options including operations or new_content.
+        message (str): Commit message for the edit.
         
     Returns:
         dict: Edit operation result.
     """
     if path is None:
         return {"error": "Path is required for edit operations"}
+    
+    if not message:
+        return {"error": "Message parameter is required for edit operation. Provide a brief description of the change."}
         
     full_path = Path(CODEBASE_PATH) / path
     operations = options.get("operations", [])
@@ -668,23 +649,41 @@ def _handle_edit_operations(path, options):
     try:
         # Handle full file replacement
         if new_content is not None:
+            # Check if file is locked
+            if full_path.exists() and is_file_locked(str(full_path)):
+                return {
+                    "error": "File is currently open",
+                    "message": f"Cannot edit '{path}' because it appears to be open in another application. Please close the file and try again.",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+                }
+                
             # Create parent directories if they don't exist
             full_path.parent.mkdir(parents=True, exist_ok=True)
             
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(new_content)
+            
+            # Log to history
+            add_commit("edit", path, message)
+                
             return {"success": True, "message": "File content replaced"}
             
         # Check if file exists
         if not full_path.exists():
             return {"error": "File not found"}
+        
+        # Check if file is locked
+        if is_file_locked(str(full_path)):
+            return {
+                "error": "File is currently open",
+                "message": f"Cannot edit '{path}' because it appears to be open in another application. Please close the file and try again.",
+                "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+            }
             
         # Read original content
         with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()
             
-        # Create diff_match_patch instance for efficient patching
-        dmp = diff_match_patch()
         modified_content = content
         applied_operations = 0
         
@@ -697,257 +696,69 @@ def _handle_edit_operations(path, options):
                 replace_text = op["replace"]
                 occurrence = op.get("occurrence", 1)
                 
-                # Find the specified occurrence
-                start_pos = -1
-                for i in range(occurrence):
-                    start_pos = modified_content.find(find_text, start_pos + 1)
-                    if start_pos == -1:
-                        break
-                
-                if start_pos != -1:
-                    # Create patches for this edit
-                    new_content = (
-                        modified_content[:start_pos] + 
-                        replace_text + 
-                        modified_content[start_pos + len(find_text):]
-                    )
-                    patches = dmp.patch_make(modified_content, new_content)
-                    modified_content, _ = dmp.patch_apply(patches, modified_content)
-                    applied_operations += 1
+                # Handle occurrence-specific replacement
+                if occurrence == 1:
+                    # Replace first occurrence
+                    if find_text in modified_content:
+                        modified_content = modified_content.replace(find_text, replace_text, 1)
+                        applied_operations += 1
+                else:
+                    # Find the nth occurrence
+                    start_pos = -1
+                    for i in range(occurrence):
+                        start_pos = modified_content.find(find_text, start_pos + 1)
+                        if start_pos == -1:
+                            break
                     
-            elif mode == "insert_after" and "find" in op and "content" in op:
-                find_text = op["find"]
-                insert_content = op["content"]
-                occurrence = op.get("occurrence", 1)
-                
-                # Find the specified occurrence
-                start_pos = -1
-                for i in range(occurrence):
-                    start_pos = modified_content.find(find_text, start_pos + 1)
-                    if start_pos == -1:
-                        break
-                
-                if start_pos != -1:
-                    # Create patches for this edit
-                    insert_pos = start_pos + len(find_text)
-                    new_content = (
-                        modified_content[:insert_pos] + 
-                        insert_content + 
-                        modified_content[insert_pos:]
-                    )
-                    patches = dmp.patch_make(modified_content, new_content)
-                    modified_content, _ = dmp.patch_apply(patches, modified_content)
-                    applied_operations += 1
-                    
-            elif mode == "insert_before" and "find" in op and "content" in op:
-                find_text = op["find"]
-                insert_content = op["content"]
-                occurrence = op.get("occurrence", 1)
-                
-                # Find the specified occurrence
-                start_pos = -1
-                for i in range(occurrence):
-                    start_pos = modified_content.find(find_text, start_pos + 1)
-                    if start_pos == -1:
-                        break
-                
-                if start_pos != -1:
-                    # Create patches for this edit
-                    new_content = (
-                        modified_content[:start_pos] + 
-                        insert_content + 
-                        modified_content[start_pos:]
-                    )
-                    patches = dmp.patch_make(modified_content, new_content)
-                    modified_content, _ = dmp.patch_apply(patches, modified_content)
-                    applied_operations += 1
-                    
-            elif mode == "append" and "content" in op:
-                append_content = op["content"]
-                
-                # Add a newline if the file doesn't end with one
-                if modified_content and not modified_content.endswith('\n'):
-                    append_content = '\n' + append_content
-                    
-                # Create patches for this edit
-                new_content = modified_content + append_content
-                patches = dmp.patch_make(modified_content, new_content)
-                modified_content, _ = dmp.patch_apply(patches, modified_content)
-                applied_operations += 1
-                
-            elif mode == "prepend" and "content" in op:
-                prepend_content = op["content"]
-                
-                # Add a newline if the content doesn't end with one
-                if prepend_content and not prepend_content.endswith('\n'):
-                    prepend_content = prepend_content + '\n'
-                    
-                # Create patches for this edit
-                new_content = prepend_content + modified_content
-                patches = dmp.patch_make(modified_content, new_content)
-                modified_content, _ = dmp.patch_apply(patches, modified_content)
-                applied_operations += 1
+                    if start_pos != -1:
+                        # Replace at the specific position
+                        modified_content = (
+                            modified_content[:start_pos] + 
+                            replace_text + 
+                            modified_content[start_pos + len(find_text):]
+                        )
+                        applied_operations += 1
         
         # Write the modified content back to the file
         with open(full_path, 'w', encoding='utf-8') as f:
             f.write(modified_content)
+        
+        # Log to history
+        add_commit("edit", path, message)
             
         return {"success": True, "operations_applied": applied_operations}
             
     except Exception as e:
-        return {"error": f"Error during edit operation: {str(e)}"}
+        return {
+            "error": f"Error during edit operation: {str(e)}",
+            "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+        }
 
 
 def _handle_search_operations(options):
     """
-    Handle code search operations with smart block detection.
+    Handle code search operations with simple match results.
     
     Args:
         options (dict): Search parameters.
         
     Returns:
-        dict: Search results - showing exactly 5 individual code blocks as results.
+        dict: Search results - simple list of file/line matches.
     """
     search_term = options.get("search_term", "")
     file_pattern = options.get("file_pattern", "**/*")
     case_sensitive = options.get("case_sensitive", False)
-    include_block_content = options.get("include_block_content", True)  # Always include block content
-    max_results = options.get("max_results", 100)  # Still collect up to 100 for total count
-    max_display_blocks = options.get("max_display_results", 5)  # Show 5 individual blocks max
+    max_results = options.get("max_results", 200)  # Increased since results are smaller
+    max_display_results = options.get("max_display_results", 25)  # Show more results
     
     if not search_term:
         return {"error": "search_term is required for search operation"}
     
-    all_blocks = []  # Flat list of all code blocks found
+    matches = []
     total_matches = 0
     files_checked = 0
     files_with_matches = 0
     base_path = Path(CODEBASE_PATH)
-    
-    def detect_language(filename):
-        """Determine if a file uses braces or indentation for blocks"""
-        ext = os.path.splitext(filename.lower())[1]
-        
-        # Python and YAML use indentation
-        if ext in ['.py', '.pyx', '.pyw', '.yml', '.yaml']:
-            return 'indentation'
-        
-        # Most other languages use braces
-        elif ext in ['.js', '.ts', '.jsx', '.tsx', '.java', '.c', '.cpp', '.cs', '.go', '.php', '.swift', '.kt', '.rs']:
-            return 'braces'
-            
-        # Default to braces for unknown types
-        else:
-            return 'braces'
-    
-    def find_brace_block(lines, match_line_index):
-        """Find the boundaries of a code block using braces"""
-        # Default to showing just a few lines around the match if no block found
-        start_line = max(0, match_line_index - 3)
-        end_line = min(len(lines) - 1, match_line_index + 3)
-        
-        # Track brace nesting
-        open_braces = 0
-        close_braces = 0
-        found_opening = False
-        
-        # First, check the line itself and count braces
-        current_line = lines[match_line_index]
-        open_count_current = current_line.count('{')
-        close_count_current = current_line.count('}')
-        
-        # Search backwards for opening brace or function/class definition
-        for i in range(match_line_index, -1, -1):
-            line = lines[i]
-            open_count = line.count('{')
-            close_count = line.count('}')
-            
-            open_braces += open_count
-            close_braces += close_count
-            
-            # Check for function/method definition or class definition
-            if 'function ' in line or 'class ' in line or 'def ' in line or '= function' in line:
-                start_line = i
-                found_opening = True
-                break
-                
-            if open_braces > close_braces:
-                start_line = i
-                found_opening = True
-                break
-        
-        # Reset counters but account for braces on the current line
-        open_braces = open_count_current
-        close_braces = close_count_current
-        
-        # Only search for closing brace if we found an opening brace
-        if found_opening:
-            # Search forwards for closing brace
-            for i in range(match_line_index + 1, len(lines)):
-                line = lines[i]
-                open_count = line.count('{')
-                close_count = line.count('}')
-                
-                open_braces += open_count
-                close_braces += close_count
-                
-                if close_braces > open_braces:
-                    end_line = i
-                    break
-        
-        return start_line, end_line
-    
-    def find_indentation_block(lines, match_line_index):
-        """Find the boundaries of a code block using indentation (Python-style)"""
-        # Default to showing just a few lines around the match
-        start_line = max(0, match_line_index - 3)
-        end_line = min(len(lines) - 1, match_line_index + 3)
-        
-        # Get the indentation of the matched line
-        match_line = lines[match_line_index]
-        match_indent = len(match_line) - len(match_line.lstrip())
-        
-        # Find the start of the block (line ending with : with less indentation)
-        for i in range(match_line_index, -1, -1):
-            line = lines[i]
-            if not line.strip():  # Skip empty lines
-                continue
-                
-            indent = len(line) - len(line.lstrip())
-            
-            # If we find a line with less indentation and ending with :, it's likely the start of our block
-            if indent < match_indent and line.rstrip().endswith(':'):
-                start_line = i
-                block_indent = indent
-                break
-                
-            # If we find a line with significantly less indentation, it could be a parent block
-            if indent < match_indent and i > 0:
-                # Check if there's a block start nearby
-                for j in range(i, max(0, i-5), -1):
-                    prev = lines[j]
-                    if prev.rstrip().endswith(':'):
-                        start_line = j
-                        block_indent = len(prev) - len(prev.lstrip())
-                        break
-                break
-        
-        # Find the end of the block (first line with same or less indentation as block start)
-        block_indent = len(lines[start_line]) - len(lines[start_line].lstrip())
-        
-        for i in range(match_line_index + 1, len(lines)):
-            line = lines[i]
-            if not line.strip():  # Skip empty lines
-                continue
-                
-            indent = len(line) - len(line.lstrip())
-            
-            # If we find a line with same or less indentation than the block start, it's the end
-            if indent <= block_indent:
-                end_line = i - 1  # The line before this one was the last in the block
-                break
-        
-        return start_line, end_line
     
     try:
         # Find all files recursively
@@ -959,8 +770,8 @@ def _handle_search_operations(options):
                 full_path = os.path.join(root, filename)
                 rel_path = os.path.relpath(full_path, base_path)
                 
-                # Check if file matches pattern
-                if not fnmatch(rel_path, file_pattern):
+                # Skip node_modules and check pattern
+                if should_skip_path(rel_path) or not fnmatch(rel_path, file_pattern):
                     continue
                 
                 files_checked += 1
@@ -970,9 +781,6 @@ def _handle_search_operations(options):
                     if os.path.getsize(full_path) > 10 * 1024 * 1024:  # 10MB
                         continue
                         
-                    # Determine language type for block detection
-                    lang_type = detect_language(filename)
-                    
                     # Read the file line by line
                     with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
                         lines = f.readlines()
@@ -980,49 +788,32 @@ def _handle_search_operations(options):
                     file_has_matches = False
                     
                     # Search each line
-                    for i, line in enumerate(lines):
-                        if (case_sensitive and search_term in line) or \
-                           (not case_sensitive and search_term.lower() in line.lower()):
+                    for line_idx, line in enumerate(lines):
+                        # Clean the line content - remove trailing whitespace and normalize
+                        clean_line = line.rstrip('\r\n\t ')
+                        
+                        # Skip empty lines
+                        if not clean_line:
+                            continue
                             
+                        # Check for match
+                        if case_sensitive:
+                            match_pos = clean_line.find(search_term)
+                        else:
+                            match_pos = clean_line.lower().find(search_term.lower())
+                        
+                        if match_pos != -1:
                             file_has_matches = True
                             
-                            # Always include the line info
+                            # Create simple match result
                             match_info = {
-                                "lineNumber": i + 1,
-                                "matchLine": line.rstrip('\r\n'),
                                 "file": rel_path,
-                                "matchPosition": line.lower().find(search_term.lower()) if not case_sensitive else line.find(search_term)
+                                "lineNumber": line_idx + 1,
+                                "lineContent": clean_line,
+                                "matchPosition": match_pos
                             }
                             
-                            # Always include block boundaries
-                            if lang_type == 'indentation':
-                                start_idx, end_idx = find_indentation_block(lines, i)
-                            else:
-                                start_idx, end_idx = find_brace_block(lines, i)
-                            
-                            match_info["blockStart"] = start_idx + 1  # 1-indexed
-                            match_info["blockEnd"] = end_idx + 1      # 1-indexed
-                            match_info["language"] = lang_type
-                            match_info["blockLines"] = end_idx - start_idx + 1
-                            
-                            # Always include the block content
-                            block_lines = lines[start_idx:end_idx+1]
-                            block_content = "".join(l.rstrip('\r\n') + '\n' for l in block_lines)
-                            
-                            # Check if block content is too large
-                            if len(block_content) > MAX_RESULT_SIZE / 10:
-                                # Only show a snippet with an ellipsis
-                                snippet_size = 500
-                                match_info["blockContent"] = (
-                                    block_content[:snippet_size] + 
-                                    f"\n... (block truncated, {len(block_content)} characters total) ...\n"
-                                )
-                                match_info["truncated"] = True
-                            else:
-                                match_info["blockContent"] = block_content
-                            
-                            # Add to our flat list of all blocks
-                            all_blocks.append(match_info)
+                            matches.append(match_info)
                             total_matches += 1
                             
                             if total_matches >= max_results:
@@ -1034,19 +825,19 @@ def _handle_search_operations(options):
                 except Exception as e:
                     continue
         
-        # Select the top N blocks to display
-        displayed_blocks = all_blocks[:max_display_blocks]
-        truncated = len(all_blocks) > max_display_blocks
+        # Return the requested number of results
+        displayed_matches = matches[:max_display_results]
+        truncated = len(matches) > max_display_results
         
         return {
-            "blocks": displayed_blocks,
+            "matches": displayed_matches,
             "totalMatches": total_matches,
-            "displayedMatches": len(displayed_blocks),
+            "displayedMatches": len(displayed_matches),
             "filesWithMatches": files_with_matches,
             "filesChecked": files_checked,
             "searchTerm": search_term,
             "truncated": truncated,
-            "message": f"Found {total_matches} matches in {files_with_matches} files. Showing {len(displayed_blocks)} blocks." if truncated else None,
+            "message": f"Found {total_matches} matches in {files_with_matches} files. Showing {len(displayed_matches)} matches." if truncated else None,
             "options": {
                 "filePattern": file_pattern,
                 "caseSensitive": case_sensitive
@@ -1062,7 +853,7 @@ def _handle_backup_operations(operation, options):
     Handle backup operations for the codebase.
     
     Args:
-        operation (str): Backup operation to perform (create, list, restore).
+        operation (str): Backup operation to perform (create, list, restore, browse).
         options (dict): Additional options for the operation.
         
     Returns:
@@ -1094,7 +885,6 @@ def _handle_backup_operations(operation, options):
                     # Get creation time for sorting/display
                     try:
                         created_time = item.stat().st_ctime
-                        from datetime import datetime
                         created_time_str = datetime.fromtimestamp(created_time).strftime("%Y-%m-%d %H:%M:%S")
                         
                         # Get size of backup
@@ -1123,22 +913,23 @@ def _handle_backup_operations(operation, options):
         elif operation == "create":
             # Generate default backup name if none provided
             backup_name = options.get("name")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
             if backup_name is None:
-                from datetime import datetime
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup_name = f"backup_{timestamp}"
             else:
                 # Sanitize the backup name to ensure it's a valid directory name
-                backup_name = re.sub(r'[^\w\-\.]', '_', backup_name)
+                clean_name = re.sub(r'[^\w\-\.]', '_', backup_name)
+                backup_name = f"{clean_name}_{timestamp}"  # Always append timestamp
             
             # Create full backup path
             backup_path = backup_root / backup_name
             
-            # Check if backup with this name already exists
+            # Check if backup with this name already exists (shouldn't happen with timestamp)
             if backup_path.exists():
                 return {
                     "success": False,
-                    "error": f"Backup with name '{backup_name}' already exists. Choose a different name."
+                    "error": f"Backup with name '{backup_name}' already exists. This shouldn't happen with timestamp suffix."
                 }
             
             # Copy the entire codebase to the backup location
@@ -1169,36 +960,152 @@ def _handle_backup_operations(operation, options):
             # Get target directory (codebase path)
             target_path = Path(CODEBASE_PATH)
             
-            # Remove current codebase contents
-            if target_path.exists():
-                # Remove all contents but keep the directory
-                for item in target_path.iterdir():
-                    if item.is_dir():
-                        shutil.rmtree(item)
-                    else:
-                        os.remove(item)
-            else:
-                # Create target directory if it doesn't exist
-                target_path.mkdir(parents=True)
+            # Check for locked files before starting restore
+            locked_files = []
+            for item in target_path.rglob('*'):
+                if item.is_file() and is_file_locked(str(item)):
+                    locked_files.append(str(item.relative_to(target_path)))
             
-            # Copy backup contents to codebase directory
-            for item in backup_path.iterdir():
-                if item.is_dir():
-                    shutil.copytree(item, target_path / item.name)
+            if locked_files:
+                return {
+                    "error": "Files are currently open",
+                    "message": f"Cannot restore because {len(locked_files)} files appear to be open in other applications. Please close all files and try again.",
+                    "locked_files": locked_files[:5],  # Show first 5 locked files
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+                }
+            
+            try:
+                # Remove current codebase contents
+                if target_path.exists():
+                    # Remove all contents but keep the directory
+                    for item in target_path.iterdir():
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            os.remove(item)
                 else:
-                    shutil.copy2(item, target_path / item.name)
+                    # Create target directory if it doesn't exist
+                    target_path.mkdir(parents=True)
+                
+                # Copy backup contents to codebase directory
+                for item in backup_path.iterdir():
+                    if item.is_dir():
+                        shutil.copytree(item, target_path / item.name)
+                    else:
+                        shutil.copy2(item, target_path / item.name)
+            except Exception as e:
+                return {
+                    "error": "Restore operation failed",
+                    "message": f"Could not restore from backup '{backup_name}': {str(e)}",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+                }
             
             return {
                 "success": True,
                 "message": f"Successfully restored codebase from backup '{backup_name}'",
                 "backup_name": backup_name
             }
+        
+        # BROWSE BACKUP
+        elif operation == "browse":
+            backup_name = options.get("name")
+            browse_path = options.get("path", "")
+            
+            if not backup_name:
+                return {"error": "name is required for browse_backup operation"}
+                
+            backup_path = backup_root / backup_name
+            
+            # Validate backup exists
+            if not backup_path.exists() or not backup_path.is_dir():
+                return {
+                    "error": f"Backup '{backup_name}' not found. Use codebase_browser operation='backup_list' to see available backups."
+                }
+            
+            # Construct full browse path
+            full_browse_path = backup_path
+            if browse_path:
+                full_browse_path = backup_path / browse_path
+                
+            if not full_browse_path.exists():
+                return {"error": f"Path '{browse_path}' not found in backup '{backup_name}'"}
+            
+            if full_browse_path.is_file():
+                # Read file content
+                try:
+                    with open(full_browse_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                    return {
+                        "type": "file",
+                        "content": content,
+                        "path": browse_path or full_browse_path.name,
+                        "backup_name": backup_name,
+                        "read_only": True,
+                        "message": "This is a READ-ONLY view from backup. Use backup_restore to restore files for editing."
+                    }
+                except Exception as e:
+                    return {"error": f"Could not read file: {str(e)}"}
+            else:
+                # List directory contents
+                files = []
+                dirs = []
+                
+                for item in full_browse_path.iterdir():
+                    if item.is_file():
+                        files.append(item.name)
+                    elif item.is_dir():
+                        dirs.append(item.name + "/")
+                
+                return {
+                    "type": "directory",
+                    "files": files,
+                    "directories": dirs,
+                    "path": browse_path,
+                    "backup_name": backup_name,
+                    "read_only": True,
+                    "message": "This is a READ-ONLY view from backup. Use backup_restore to restore files for editing."
+                }
             
         else:
             return {"error": f"Unknown backup operation: {operation}"}
             
     except Exception as e:
         return {"error": f"Error during backup_{operation}: {str(e)}"}
+
+
+def _handle_history_operations():
+    """
+    Handle history operations.
+    
+    Returns:
+        dict: History operation result.
+    """
+    try:
+        history_file = get_history_file()
+        
+        # Read history
+        with open(history_file, 'r') as f:
+            history = json.load(f)
+        
+        if not history:
+            return {
+                "commits": [],
+                "count": 0,
+                "message": "No recent history found, this is normal. Any changes the AI makes to the project will create a history."
+            }
+        
+        return {
+            "commits": history,
+            "count": len(history),
+            "message": f"Showing {len(history)} recent commits (newest first)"
+        }
+        
+    except Exception as e:
+        return {
+            "commits": [],
+            "count": 0,
+            "message": "No recent history found, this is normal. Any changes the AI makes to the project will create a history."
+        }
 
 
 # Start the server when script is run directly
