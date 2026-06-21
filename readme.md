@@ -1,110 +1,200 @@
 # MCP Codebase Browser
-A Python-based Model Context Protocol (MCP) server that gives Claude full access to your codebase, allowing it to read, write, create, delete, edit, and manage files and directories.  
+A Python-based Model Context Protocol (MCP) server that gives Claude full access to your codebase for file management, code editing, searching, and direct shell command execution.
 
-This server was created with assistance from Claude 3.7 Sonnet.  
-
-I've tried a few other MCP tools and I found that they were just overwhelming with dependencies or complexities that I didn't want or need. So I tried to create a simple easy to setup MCP tool that would let Claude (and maybe other AI one day) just mess with files on my computer.  
-
-It's currently not very advanced, but that's kinda the plan is to keep it simple. I've talked to Claude waayy too much and I feel like I know how he ticks, and this tool is created in a way to not go against the grain with Claude's typical behaviors.  
+This server was created with assistance from Claude and prioritizes simplicity and compatibility with Claude's natural working style.
 
 ![MCP Server](https://github.com/user-attachments/assets/e9b6d97d-e3d4-4f8f-9038-fa4224531e9d)
 
+## Overview
+
+The Codebase Browser is a lightweight MCP tool that combines file operations, code editing, search, backups, and **CLI command execution** into a single unified interface. It works with both Claude Desktop (via stdio) and browser-based Claude (via SSE/HTTP).
+
+**Key Features:**
+* File operations (read, write, delete, move, copy, mkdir, rmdir)
+* Code editing with find/replace operations
+* Full-text search across your codebase
+* Automatic backups and restoration
+* **Shell command execution with commit tracking** (new)
+* Automatic operation history and commit tracking
+* Two deployment modes: Claude Desktop (stdio) and Web/Browser (SSE)
+
 ## Requirements
-* Windows
+
+### Core
 * Python 3.8 or higher
-* Claude Desktop app with Pro subscription
+* Claude Desktop app OR browser-based Claude with MCP support
+
+### OS Support
+* Windows, macOS, Linux
+* Shell: cmd, PowerShell, bash, zsh (auto-detected)
 
 ## Installation
-### Quick Install
 
-Run setup.bat to automatically:
+### Quick Install (Claude Desktop)
 
+Run `setup.bat` (Windows) or the equivalent shell script to automatically:
 * Create a Python virtual environment
 * Install required dependencies
-* Create a Project directory
+* Set up a Project directory
+* Detect your OS and available shells
+* Generate CLI configuration
 * Display Claude Desktop configuration instructions
 
-
 ### Manual Installation
-Create a Python virtual environment:
-```
+
+**Create virtual environment:**
+```bash
 python -m venv mcp_env
-mcp_env\Scripts\activate
-```
-Install dependencies:
-```
-pip install mcp pathlib glob2 diff_match_patch
+source mcp_env/bin/activate  # On Windows: mcp_env\Scripts\activate
 ```
 
-Create a directory named `Project`  
-
-Configure Claude Desktop:
-
-Open claude_desktop_config.json  
-Add a configuration (adjust paths as needed):
+**Install dependencies:**
+```bash
+pip install mcp
 ```
+
+**Create Project directory:**
+```bash
+mkdir Project
+```
+
+**Configure Claude Desktop:**
+Open `claude_desktop_config.json` and add:
+```json
 {
   "mcpServers": {
     "MCP_Codebase_Browser": {
-      "command": "C:\path\to\your\mcp_env\Scripts\python.exe",
-      "args": ["C:\path\to\your\codebase_server.py"]
+      "command": "/path/to/your/mcp_env/bin/python",
+      "args": ["/path/to/your/codebase_server.py"]
     }
   }
 }
 ```
 
 ## Usage
-Complete the setup, make sure to add your custom configuration to Claude Desktop's `claude_desktop_config.json` 
-Place your entire codebase into the `Project` directory  
-Restart Claude Desktop  
-Look for the hammer icon in the bottom right corner of the chat input box  
-Claude can now perform various codebase tasks when you ask him to  
-When Claude tries to use a tool, he will ask for permission first  
 
-Consider the following examples:
+### With Claude Desktop
+1. Complete setup above
+2. Place your codebase in the `Project` directory
+3. Restart Claude Desktop
+4. Look for the hammer icon in the chat input box
+5. Claude can now manage your codebase
 
+### File Operations Examples
 * "List all files in the project"
 * "Read the content of src/main.py"
-* "Create a new file called utils.js and move our utilities there"
+* "Create a new file called utils.js"
 * "Search for all uses of 'import' in the codebase"
-* "Edit line 53 and increase the font size"
-* "Show me all blocks of code with 'dogs' in them"
-* "Rename file X to Y"
-* "Create a new directory called 'models'"
-* "Search for 'function' in the code"
-* "Backup my codebase named 'my_project_backup'"
-* "List our backed up projects'"
-* "Restore 'my_project_backup'"
+* "Edit this function and add error handling"
+* "Create a backup of my project"
+* "Restore from the backup named 'my_project_backup'"
 
-## Safety Features
-* 1MB file size limit to prevent loading large files
-* Through abstraction of the actual filepath, Claude should be restricted to the codebase path
-* Unless he knows the full file path, Backups cannot be deleted by Claude
+### CLI Command Examples (NEW)
+* "Run `npm install` to set up dependencies"
+* "Execute the test suite with `pytest`"
+* "Compile the code using `gcc`"
+* "Check the git status"
+* "Build the project with `cargo build`"
 
-# WARNING
-This tool will allow Claude to make changes to your files. He will probably break things.
+When you ask Claude to run a command, he provides a message describing what he's doing, and the command is tracked in your operation history.
+
+## Deployment Modes
+
+### 1. Claude Desktop (stdio)
+**Best for:** Local development with Claude Desktop app
+
+- Direct connection via stdio
+- Automatic shell detection
+- No network exposure
+- Simplest setup
+
+**Use:** Follow the installation steps above
+
+### 2. Web/Browser (SSE)
+**Best for:** Browser-based Claude, remote access, multi-user scenarios
+
+- HTTP/SSE protocol
+- Can be tunneled for remote access
+- Requires .env configuration
+- Optional SSL/TLS support
+
+**Setup:**
+```bash
+python codebase_server_sse.py
+```
+Then configure via `.env` (copy from `.env.example`)
+
+## Configuration
+
+### CLI Configuration (Auto-generated)
+When you run `setup.bat`, a `cli_config.json` is created that tells Claude:
+- Your OS type
+- Available shells (cmd, PowerShell, bash, zsh, etc.)
+- How to invoke commands
+
+### SSE Configuration (.env)
+For the SSE version, create a `.env` file from `.env.example`:
+```bash
+cp .env.example .env
+# Edit .env with your settings
+```
+
+**Important:** Never commit `.env` to version control (it's in `.gitignore`)
+
+## Safety & Best Practices
+
+### File Size Limits
+* Large files are read/returned with line number filtering to prevent context overflow
+* Files over 10MB are skipped during search operations
+* Result sizes are capped at ~99KB to maintain response efficiency
+
+### Commit Tracking
+* Every operation (file writes, edits, deletes, CLI commands) is logged with intent
+* View operation history with: "Show me recent commits"
+* Use backups before major operations
+
+### Backups
+* Create backups: "Backup my codebase named 'v1.0'"
+* List backups: "Show me my backups"
+* Restore: "Restore from backup named 'v1.0'"
+
+# ⚠️ WARNING
+
+This tool allows Claude to make changes to your files. He will probably break things.
 
 ![Uh oh](https://github.com/user-attachments/assets/8064f185-4fdd-43fd-9705-9ce27db07e43)
 
-This project is a WIP, I take no responsibility for this tool losing your data. I recommend asking Claude to make backups often.
+This is a powerful tool. **Always ask Claude to create backups before major changes.** The author takes no responsibility for data loss.
 
 ## Troubleshooting
-* If Claude doesn't show the hammer icon, check that Claude Desktop is restarted
-* Check Claude Desktop logs at %AppData%\Claude\logs\mcp*.log
-* Ensure the paths in your configuration use double backslashes (\)
-* This has only been tested with Claude and Windows
 
-## Useage notes
-* I opted to put everything into a single tool, so you don't have to click the "allow tool" on Claude all the time, but this lets him just have full freedom instantly, it can be a good and bad thing
-* Because there aren't many restrictions, Claude can get VERY carried away with this tool. He will just go hard and he has no regard for anything but the task at hand. Beware that he will inevitably change things you did not want him to change.
-* Primarily the tool has been successful with JavaScript and Java projects so far, but it should extend to other languages pretty easily
-* Sometimes there's a syntax error, something simple, like an extra bracket or whatever, check your code, it's not that often that it happens though
-* There aren't any limits to what gets returned to Claude in many scenarios, meaning there can be high context useage on large files, I did try to limit search results to 5 results though
+* **Claude doesn't show the hammer icon:** Restart Claude Desktop and check that `claude_desktop_config.json` has correct paths
+* **Command execution fails:** Check that your shell is in the detected shells (check `cli_config.json`)
+* **Logs:** Check Claude Desktop logs at `%AppData%\Claude\logs\mcp*.log` (Windows) or `~/.claude/logs/` (macOS/Linux)
+* **Path issues:** Ensure paths use forward slashes on macOS/Linux, backslashes on Windows
+* **SSL errors (SSE):** Verify certificate paths in `.env` are correct
 
-## Design thoughts
-I try to embrace and work with the behavior of Claude as much as I can. Other tools I've used might try to "teach" claude through error messages. For example, I've seen a text editor tool try to engineer a device to lock Claude out from doing subsequent edits to a file. In my experience, Claude sucks at calculating line numbers. If it's line editing, he'll insert stuff on lines that he didn't calculate to have been changed from a recent edit, so he breaks the files easily. The developer of the text editor tool obviously came to the same conlusion that I have. The solution in the text editing tool was to make a checksum based puzzle that Claude has to solve. In my experience with the tool Claude just gives up and tries to find a different avenue, he couldn't be bothered to try to solve the puzzle a large percentage of the time. I've learned that Claude stops paying attention after the tool reports "success" or "fail". The engineering of the puzzle tries to correct Claude's behavior, but if you work with Claude often you will realize that while you might sometimes be able to break his bad habits with enough in-context learning, it's a steep climb to success a lot of the time.
+## Notes
 
-What I'm getting at is that instead of trying to fight Claude's consistent bad behaviors, I try to lean into his good behaviors instead. He just doesn't learn through these tools, so I don't try to teach him or train him to use the tool in any special way. So for the example of editing text, I've found that Claude has an uncanny ability to keep an accurate mental construct of your code. The code in this intangible construct is very well maintained by Claude. To embrace this strength, I tried to engineer the tool to just let Claude write out what he THINKS needs to be patched, and the tool will match this and replace it with his replacement code, and it works without error most of the time because Claude is keeping very good track of the current state of the code he is working with, so the match almost always is there without Claude even needing to read the file more than once. We don't talk about line numbers, because we KNOW that Claude sucks at calculating accurate line numbers. There are no intentionally built pitfalls for Claude to get stuck in. This affords us very minimal tool use failures.
+* **Single unified tool:** Everything is one tool to minimize permission prompts
+* **No artificial restrictions:** Claude works intuitively with the tool rather than against engineered limitations
+* **Language agnostic:** Works with any programming language (JavaScript, Python, Java, Rust, Go, etc.)
+* **Context efficiency:** File operations intelligently handle size to prevent context bloat
+* **Operation history:** Every change is tracked for accountability and debugging
+
+## Design Philosophy
+
+This tool embraces Claude's strengths rather than fighting his weaknesses. 
+
+Other MCP tools try to "teach" Claude through restrictive error messages or puzzles. In practice, Claude doesn't learn well from tool constraints—he just moves on to a different approach. Instead, this tool works *with* Claude's actual behavior:
+
+- **Code awareness:** Claude maintains an excellent mental model of your code. The tool leverages this by accepting his descriptions of changes ("find X, replace with Y") rather than forcing line numbers.
+- **Intent clarity:** Every operation requires a message describing intent. This makes changes auditable and helps Claude stay focused.
+- **Simplicity:** No artificial barriers, just direct file access and command execution.
+- **History:** Full commit tracking so you can understand what happened and why.
+
+The result: minimal tool use failures and maximum productivity.
 
 ## License
-MIT License
+
+MIT License - See LICENSE file for details

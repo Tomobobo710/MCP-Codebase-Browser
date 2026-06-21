@@ -1,0 +1,88 @@
+# Virtual Environment
+mcp_env/
+venv/
+env/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Project directories
+Project/
+project/
+projects/
+
+# History and commits
+History/
+*.json
+!.github/
+!package.json
+!tsconfig.json
+
+# Backups
+Backups/
+*.backup
+*.bak
+
+# Environment and config
+.env
+.env.local
+.env.*.local
+cli_config.json
+
+# SSL/TLS Certificates
+certs/
+*.pem
+*.key
+*.crt
+*.cert
+SSL/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Logs
+logs/
+*.log
+.pytest_cache/
+
+# OS
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+.cache/

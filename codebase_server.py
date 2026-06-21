@@ -9,9 +9,32 @@ import glob
 import traceback
 import json
 from datetime import datetime
+import subprocess
 
 # Auto-detect CODEBASE_PATH relative to script location
 CODEBASE_PATH = None  # Automatically determined relative to script
+
+# CLI configuration
+CLI_CONFIG = None
+
+def load_cli_config():
+    """
+    Load CLI configuration from cli_config.json if it exists.
+    
+    Returns:
+        dict: CLI configuration or empty dict if not found.
+    """
+    try:
+        script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+        config_path = script_dir / "cli_config.json"
+        
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Warning: Could not load CLI config: {e}")
+    
+    return {}
 
 # Maximum result size in characters (serialized JSON)
 MAX_RESULT_SIZE = 99000
@@ -40,6 +63,9 @@ def get_codebase_path():
 # Set up the codebase path
 if CODEBASE_PATH is None:
     CODEBASE_PATH = get_codebase_path()
+
+# Load CLI config on startup
+CLI_CONFIG = load_cli_config()
 
 # Create an MCP server
 mcp = FastMCP("MCP Codebase Browser")
@@ -181,6 +207,10 @@ def codebase_browser(operation: str, path: str = None, options: dict = None, mes
       
       5. HISTORY OPERATIONS:
          - "read_recent_commits": Read recent commit history (no other parameters needed)
+      
+      6. CLI OPERATIONS:
+         - "run_command": Execute a shell command (requires command in options)
+         (Also requires message parameter for commit tracking)
     
     - path: (Required for most operations) File or directory path to operate on
            Paths are relative to the codebase root directory
@@ -270,6 +300,11 @@ def codebase_browser(operation: str, path: str = None, options: dict = None, mes
       
       5. HISTORY OPERATIONS:
          - read_recent_commits: {} (No additional options required)
+      
+      6. CLI OPERATIONS:
+         - run_command: {
+             "command": str (Required, the shell command to execute)
+           }
     
     Returns:
         dict: Response varies by operation, but typically includes:
@@ -313,6 +348,12 @@ def codebase_browser(operation: str, path: str = None, options: dict = None, mes
     # GROUP 5: HISTORY OPERATIONS
     elif operation == "read_recent_commits":
         result = _handle_history_operations()
+        result.update(result_metadata)
+        return check_result_size(result)
+    
+    # GROUP 6: CLI OPERATIONS
+    elif operation == "run_command":
+        result = _handle_run_command_operations(options, message)
         result.update(result_metadata)
         return check_result_size(result)
     
@@ -1106,6 +1147,56 @@ def _handle_history_operations():
             "count": 0,
             "message": "No recent history found, this is normal. Any changes the AI makes to the project will create a history."
         }
+
+
+def _handle_run_command_operations(options, message):
+    """
+    Handle CLI command execution operations.
+    
+    Args:
+        options (dict): Command execution options.
+        message (str): Description of the command for commit tracking.
+        
+    Returns:
+        dict: Command output and exit code.
+    """
+    command = options.get("command")
+    
+    if not command:
+        return {"error": "command is required for run_command operation"}
+    
+    if not message:
+        return {"error": "message is required for run_command operation to track intent"}
+    
+    if not CLI_CONFIG:
+        return {
+            "error": "CLI not configured",
+            "message": "cli_config.json not found. Run setup.bat to generate it."
+        }
+    
+    try:
+        result = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True
+        )
+    except Exception as e:
+        return {
+            "error": f"Error executing command: {str(e)}",
+            "traceback": traceback.format_exc(),
+            "command": command
+        }
+    
+    add_commit("run_command", command, message)
+    
+    return {
+        "success": result.returncode == 0,
+        "exit_code": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "command": command
+    }
 
 
 # Start the server when script is run directly
