@@ -8,7 +8,7 @@ echo This script will:
 echo  1. Create a Python virtual environment
 echo  2. Install required dependencies
 echo  3. Set up a Project directory for your code
-echo  4. Detect OS and available shells
+echo  4. Detect available shells
 echo  5. Generate CLI configuration
 echo  6. Show you the Claude Desktop configuration
 echo.
@@ -46,7 +46,7 @@ if exist "mcp_env" (
 
 echo [2/5] Installing dependencies...
 call mcp_env\Scripts\activate.bat
-pip install mcp
+pip install mcp starlette uvicorn anyio sse-starlette
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Failed to install dependencies.
     pause
@@ -55,10 +55,7 @@ if %ERRORLEVEL% NEQ 0 (
 echo Dependencies installed successfully.
 
 echo [3/5] Setting up Project directory...
-REM Get the absolute path to the current directory
 for %%i in (".") do set "CURRENT_DIR=%%~fi"
-
-REM Create a Project directory in the current folder
 set "PROJECT_DIR=%CURRENT_DIR%\Project"
 if not exist "%PROJECT_DIR%" (
     echo Creating Project directory...
@@ -67,78 +64,54 @@ if not exist "%PROJECT_DIR%" (
 ) else (
     echo Project directory already exists at: %PROJECT_DIR%
 )
-
 echo NOTE: Put your project files and folders in the 'Project' directory.
-echo      All sub-directories are indexed recursively and files over 1MB will be ignored.
 echo.
 
-echo [4/5] Detecting OS and available shells...
+echo [4/5] Detecting available shells...
 
-REM Detect OS (Windows is default here since we're in .bat)
-set "OS_TYPE=Windows"
-set "SHELL_TYPE=cmd"
-set "PYTHON_PATH=%CURRENT_DIR%\mcp_env\Scripts\python.exe"
-set "CLI_INVOKE_CMD=cmd /c"
+REM Get home directory
+set "HOME_DIR=%USERPROFILE%"
+set "EXAMPLE_PATH=%USERPROFILE%\Desktop"
+
+REM Always have cmd
+set "AVAILABLE_SHELLS=cmd"
+set "HAS_POWERSHELL=false"
 
 REM Check for PowerShell
 powershell -Command "exit" > nul 2>&1
 if %ERRORLEVEL% EQU 0 (
     set "HAS_POWERSHELL=true"
+    set "AVAILABLE_SHELLS=cmd, powershell"
+    echo Detected: cmd, PowerShell
 ) else (
-    set "HAS_POWERSHELL=false"
+    echo Detected: cmd only
 )
-
-REM Check for Git Bash
-if exist "C:\Program Files\Git\bin\bash.exe" (
-    set "HAS_BASH=true"
-    set "BASH_PATH=C:\Program Files\Git\bin\bash.exe"
-) else if exist "C:\Program Files (x86)\Git\bin\bash.exe" (
-    set "HAS_BASH=true"
-    set "BASH_PATH=C:\Program Files (x86)\Git\bin\bash.exe"
-) else (
-    bash --version > nul 2>&1
-    if %ERRORLEVEL% EQU 0 (
-        set "HAS_BASH=true"
-        set "BASH_PATH=bash"
-    ) else (
-        set "HAS_BASH=false"
-    )
-)
-
-echo Detected OS: %OS_TYPE%
-echo Primary Shell: %SHELL_TYPE%
-if "%HAS_POWERSHELL%"=="true" echo Available: PowerShell
-if "%HAS_BASH%"=="true" echo Available: Bash
 
 echo.
 echo [5/5] Generating CLI configuration...
 
-REM Create cli_config.json
-if "%HAS_BASH%"=="true" (
+REM Escape backslashes for JSON
+set "HOME_DIR_JSON=%HOME_DIR:\=\\%"
+set "EXAMPLE_PATH_JSON=%EXAMPLE_PATH:\=\\%"
+
+if "%HAS_POWERSHELL%"=="true" (
     (
         echo {
-        echo   "os": "%OS_TYPE%",
-        echo   "primary_shell": "%SHELL_TYPE%",
-        echo   "available_shells": ["cmd", "powershell", "bash"],
-        echo   "python_path": "%PYTHON_PATH:\\\\",
-        echo   "cli_invoke_cmd": "%CLI_INVOKE_CMD%",
-        echo   "bash_available": true,
-        echo   "bash_path": "%BASH_PATH:\\\\",
-        echo   "powershell_available": %HAS_POWERSHELL:~0,1%%HAS_POWERSHELL:~1%,
-        echo   "user_instructions": "You are on Windows with Git Bash available. Prefer bash for CLI commands when possible."
+        echo   "os": "Windows",
+        echo   "available_shells": ["cmd", "powershell"],
+        echo   "powershell_available": true,
+        echo   "home_dir": "%HOME_DIR_JSON%",
+        echo   "example_path": "%EXAMPLE_PATH_JSON%"
         echo }
     ) > cli_config.json
 ) else (
     (
         echo {
-        echo   "os": "%OS_TYPE%",
-        echo   "primary_shell": "%SHELL_TYPE%",
-        echo   "available_shells": ["cmd", "powershell"],
-        echo   "python_path": "%PYTHON_PATH:\\\\",
-        echo   "cli_invoke_cmd": "%CLI_INVOKE_CMD%",
-        echo   "bash_available": false,
-        echo   "powershell_available": %HAS_POWERSHELL:~0,1%%HAS_POWERSHELL:~1%,
-        echo   "user_instructions": "You are on Windows. Use cmd or PowerShell for CLI commands."
+        echo   "os": "Windows",
+        echo   "available_shells": ["cmd"],
+        echo   "powershell_available": false,
+        echo   "home_dir": "%HOME_DIR_JSON%",
+        echo   "example_path": "%EXAMPLE_PATH_JSON%"
         echo }
     ) > cli_config.json
 )
@@ -147,9 +120,9 @@ echo CLI configuration generated: cli_config.json
 echo.
 
 echo ========================================================
-echo Claude Desktop configuration...
+echo Claude Desktop configuration
 echo ========================================================
-echo Add the following configuration to claude_desktop_config.json (copy and paste this):
+echo Add the following to claude_desktop_config.json:
 echo.
 echo {
 echo   "mcpServers": {
@@ -160,14 +133,13 @@ echo     }
 echo   }
 echo }
 echo.
-
 echo ========================================================
-echo Setup completed successfully!
+echo Setup complete!
 echo ========================================================
 echo  - Virtual environment: mcp_env
 echo  - Project directory: %PROJECT_DIR%
-echo  - CLI config file: cli_config.json
-echo  - Remember to restart Claude Desktop!
+echo  - CLI config: cli_config.json
+echo  - Restart Claude Desktop after updating the config!
 echo ========================================================
 echo.
 pause

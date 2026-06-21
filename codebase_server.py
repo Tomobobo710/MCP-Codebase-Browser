@@ -128,6 +128,41 @@ def check_result_size(result):
         }
     return result
 
+def build_run_command_description():
+    if not CLI_CONFIG:
+        return """  COMMAND OPERATIONS:
+  - run_command: {
+      "command": str (required — shell command string to execute),
+      "shell": "cmd" or "powershell" (optional, default: "cmd")
+    }"""
+
+    available_shells = CLI_CONFIG.get("available_shells", ["cmd"])
+    ps_available = CLI_CONFIG.get("powershell_available", False)
+    example_path = CLI_CONFIG.get("example_path", "C:\\Users\\username\\Desktop")
+    home_dir = CLI_CONFIG.get("home_dir", "C:\\Users\\username")
+
+    shells_str = " or ".join(f'"{s}"' for s in available_shells)
+
+    cmd_example = f'dir "{example_path}"'
+    ps_example = f'Get-ChildItem "{example_path}"'
+
+    if ps_available:
+        examples = f'cmd example:        "{cmd_example}"\n    PowerShell example: "{ps_example}"'
+        chain_note = "cmd chains with &&, PowerShell chains with ;"
+    else:
+        examples = f'cmd example: "{cmd_example}"'
+        chain_note = "Chain commands with &&"
+
+    return f"""  COMMAND OPERATIONS:
+  - run_command: {{
+      "command": str (required — shell command string to execute),
+      "shell": {shells_str} (optional, default: "cmd")
+    }}
+    You are on Windows. Home directory: {home_dir}
+    Available shells: {", ".join(available_shells)}
+    {chain_note}
+    {examples}"""
+
 # Create the low-level MCP server
 server = Server("MCP Codebase Browser")
 
@@ -137,25 +172,131 @@ async def list_tools() -> list[types.Tool]:
     return [
         types.Tool(
             name="codebase_browser",
-            description="All-in-one codebase browser tool for file management, editing, searching, and more.",
+            description=f"""All-in-one codebase browser tool for file management, editing, searching, and more.
+
+Parameters:
+- operation: (Required) Operation to perform, one of the following groups:
+
+  1. FILE OPERATIONS:
+     - "read": Read file content (requires path)
+     - "write": Write content to a file (requires path, options.content, and message)
+     - "delete": Delete a file (requires path and message)
+     - "move": Move a file or directory (requires path, options.destination, and message)
+     - "copy": Copy a file or directory (requires path, options.destination, and message)
+     - "list": List directory contents (requires path)
+     - "mkdir": Create a directory (requires path and message)
+     - "rmdir": Remove a directory (requires path and message)
+
+  2. EDIT OPERATIONS:
+     - "edit": Edit file content with targeted find/replace (requires path and message)
+
+  3. SEARCH OPERATIONS:
+     - "search": Search for text across all files (requires options.search_term)
+
+  4. BACKUP OPERATIONS:
+     - "backup_create": Create a backup of the codebase
+     - "backup_list": List available backups
+     - "backup_restore": Restore from a backup (requires options.name)
+     - "browse_backup": Browse backup contents read-only (requires options.name)
+
+  5. HISTORY OPERATIONS:
+     - "read_recent_commits": Read recent commit history
+
+  6. {build_run_command_description()}
+
+- path: File or directory path, relative to the codebase root. NOT an absolute path.
+
+- message: Required for all write/edit/delete/move/copy/mkdir/rmdir/run_command operations.
+           Brief description of the change, e.g. "fix typo in error handler"
+
+- options: Additional parameters depending on operation:
+
+  FILE OPERATIONS:
+  - read: {{
+      "start_line": int (optional),
+      "end_line": int (optional),
+      "format": "text" or "lines" (optional, default: "text")
+    }}
+  - write: {{
+      "content": str (required — full file content to write)
+    }}
+  - move / copy: {{
+      "destination": str (required),
+      "overwrite": bool (optional, default: false)
+    }}
+  - list: {{
+      "pattern": str (optional glob pattern, default: "**/*")
+    }}
+  - rmdir: {{
+      "recursive": bool (optional, default: false)
+    }}
+
+  EDIT OPERATIONS:
+  - edit: Use either "operations" (targeted edits) or "new_content" (full replacement), not both.
+    {{
+      "operations": [
+        {{
+          "mode": "replace" (required),
+          "find": str (required — exact text to find, including whitespace and indentation),
+          "replace": str (required — replacement text),
+          "occurrence": int (optional, which occurrence to replace, default: 1)
+        }},
+        ... (multiple operations are batched in a single call)
+      ],
+      "new_content": str (optional — replaces entire file content, ignores operations)
+    }}
+
+    IMPORTANT: "find" must match exactly, including indentation and newlines.
+    If operations_applied returns 0, the find string did not match — read the file first to verify.
+
+    BATCHING EXAMPLE — multiple edits in one call:
+    {{
+      "operations": [
+        {{"mode": "replace", "find": "old_function_name", "replace": "new_function_name"}},
+        {{"mode": "replace", "find": "version = '1.0'", "replace": "version = '1.1'"}}
+      ]
+    }}
+
+  SEARCH OPERATIONS:
+  - search: {{
+      "search_term": str (required),
+      "file_pattern": str (optional glob, default: "**/*"),
+      "case_sensitive": bool (optional, default: false),
+      "max_results": int (optional, default: 200),
+      "max_display_results": int (optional, default: 25)
+    }}
+
+  BACKUP OPERATIONS:
+  - backup_create: {{ "name": str (optional, default: timestamp-based) }}
+  - backup_restore: {{ "name": str (required) }}
+  - browse_backup: {{ "name": str (required), "path": str (optional) }}
+
+Returns:
+  - Success: {{"success": true, ...relevant data...}}
+  - Error: {{"error": "message"}}
+  - read: {{"content": str, "count": int}} or {{"lines": [...], "count": int}}
+  - list: {{"files": [...], "directories": [...]}}
+  - search: {{"matches": [...], "totalMatches": int, "filesWithMatches": int}}
+  - edit: {{"success": true, "operations_applied": int}} — if operations_applied is 0, the find string did not match
+  - run_command: {{"success": bool, "exit_code": int, "stdout": str, "stderr": str}}""",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "operation": {
                         "type": "string",
-                        "description": "Operation to perform: read, write, delete, move, copy, list, mkdir, rmdir, edit, search, backup_create, backup_list, backup_restore, browse_backup, read_recent_commits, run_command"
+                        "description": "Operation to perform. See tool description for full list and usage."
                     },
                     "path": {
                         "type": "string",
-                        "description": "File or directory path (relative to codebase root)"
+                        "description": "File or directory path, relative to codebase root. NOT an absolute path."
                     },
                     "options": {
                         "type": "object",
-                        "description": "Additional parameters for specific operations"
+                        "description": "Additional parameters for the operation. See tool description for per-operation details."
                     },
                     "message": {
                         "type": "string",
-                        "description": "Description of the operation for commit tracking"
+                        "description": "Required for write operations. Brief description of the change being made."
                     }
                 },
                 "required": ["operation"]
@@ -242,7 +383,11 @@ def _handle_file_operations(operation, path, options, message):
                 if d.is_dir() and not should_skip_path(d.name):
                     dirs.append(d.name + '/')
             
-            return {"files": files, "directories": dirs, "path": path}
+            return {
+                "files": files,
+                "directories": dirs,
+                "path": path
+            }
             
         # READ FILE
         elif operation == "read":
@@ -306,11 +451,14 @@ def _handle_file_operations(operation, path, options, message):
                 return {
                     "error": "File is currently open",
                     "message": f"Cannot write to '{path}' because it appears to be open in another application. Please close the file and try again.",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
                 
             full_path.parent.mkdir(parents=True, exist_ok=True)
+            
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
+            
             add_commit(operation, path, message)
             return {"success": True}
             
@@ -318,13 +466,17 @@ def _handle_file_operations(operation, path, options, message):
         elif operation == "delete":
             if not full_path.exists():
                 return {"error": "File not found"}
+                
             if not full_path.is_file():
                 return {"error": "Path is not a file"}
+            
             if is_file_locked(str(full_path)):
                 return {
                     "error": "File is currently open",
                     "message": f"Cannot delete '{path}' because it appears to be open in another application. Please close the file and try again.",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
+                
             os.remove(full_path)
             add_commit(operation, path, message)
             return {"success": True}
@@ -339,10 +491,12 @@ def _handle_file_operations(operation, path, options, message):
         elif operation == "rmdir":
             if not full_path.exists():
                 return {"error": "Directory not found"}
+                
             if not full_path.is_dir():
                 return {"error": "Path is not a directory"}
                 
             recursive = options.get("recursive", False)
+            
             try:
                 if recursive:
                     shutil.rmtree(full_path)
@@ -352,7 +506,11 @@ def _handle_file_operations(operation, path, options, message):
                 if not recursive:
                     return {"error": "Directory is not empty. Use recursive=True to remove non-empty directories."}
                 else:
-                    return {"error": "Could not remove directory", "message": f"Directory removal failed: {str(e)}"}
+                    return {
+                        "error": "Could not remove directory",
+                        "message": f"Directory removal failed: {str(e)}",
+                        "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+                    }
             
             add_commit(operation, path, message)
             return {"success": True}
@@ -377,6 +535,7 @@ def _handle_file_operations(operation, path, options, message):
                 return {
                     "error": "File is currently open",
                     "message": f"Cannot move '{path}' because it appears to be open in another application. Please close the file and try again.",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
                 
             dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -387,6 +546,7 @@ def _handle_file_operations(operation, path, options, message):
                 return {
                     "error": "Move operation failed",
                     "message": f"Could not move '{path}' to '{destination}': {str(e)}",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
             
             add_commit(operation, f"{path} -> {destination}", message)
@@ -419,6 +579,7 @@ def _handle_file_operations(operation, path, options, message):
                 return {
                     "error": "Copy operation failed",
                     "message": f"Could not copy '{path}' to '{destination}': {str(e)}",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
             
             add_commit(operation, f"{path} -> {destination}", message)
@@ -427,7 +588,7 @@ def _handle_file_operations(operation, path, options, message):
     except Exception as e:
         return {
             "error": f"Error during file operation: {str(e)}",
-            "traceback": traceback.format_exc()
+            "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
         }
 
 
@@ -449,6 +610,7 @@ def _handle_edit_operations(path, options, message):
                 return {
                     "error": "File is currently open",
                     "message": f"Cannot edit '{path}' because it appears to be open in another application. Please close the file and try again.",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
                 
             full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -466,6 +628,7 @@ def _handle_edit_operations(path, options, message):
             return {
                 "error": "File is currently open",
                 "message": f"Cannot edit '{path}' because it appears to be open in another application. Please close the file and try again.",
+                "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
             }
             
         with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
@@ -501,6 +664,9 @@ def _handle_edit_operations(path, options, message):
                         )
                         applied_operations += 1
         
+        if applied_operations == 0 and operations:
+            return {"success": False, "operations_applied": 0, "error": "No find strings matched. Read the file first to verify the exact text including whitespace and indentation."}
+
         with open(full_path, 'w', encoding='utf-8') as f:
             f.write(modified_content)
         
@@ -510,7 +676,7 @@ def _handle_edit_operations(path, options, message):
     except Exception as e:
         return {
             "error": f"Error during edit operation: {str(e)}",
-            "traceback": traceback.format_exc()
+            "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
         }
 
 
@@ -618,7 +784,6 @@ def _handle_backup_operations(operation, options):
             backup_root.mkdir(parents=True)
             print(f"Created Backups directory at: {backup_root}", file=sys.stderr)
             
-        # LIST BACKUPS
         if operation == "list":
             if not backup_root.exists():
                 return {
@@ -653,7 +818,6 @@ def _handle_backup_operations(operation, options):
                 "backup_root": "Backups"
             }
             
-        # CREATE BACKUP
         elif operation == "create":
             backup_name = options.get("name")
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -681,7 +845,6 @@ def _handle_backup_operations(operation, options):
                 "backup_name": backup_name
             }
             
-        # RESTORE BACKUP
         elif operation == "restore":
             backup_name = options.get("name")
             if not backup_name:
@@ -707,6 +870,7 @@ def _handle_backup_operations(operation, options):
                     "error": "Files are currently open",
                     "message": f"Cannot restore because {len(locked_files)} files appear to be open in other applications. Please close all files and try again.",
                     "locked_files": locked_files[:5],
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
             
             try:
@@ -728,6 +892,7 @@ def _handle_backup_operations(operation, options):
                 return {
                     "error": "Restore operation failed",
                     "message": f"Could not restore from backup '{backup_name}': {str(e)}",
+                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
             
             return {
@@ -736,7 +901,6 @@ def _handle_backup_operations(operation, options):
                 "backup_name": backup_name
             }
         
-        # BROWSE BACKUP
         elif operation == "browse":
             backup_name = options.get("name")
             browse_path = options.get("path", "")
@@ -831,22 +995,32 @@ def _handle_history_operations():
 def _handle_run_command_operations(options, message):
     """Handle CLI command execution operations."""
     command = options.get("command")
-    
+    shell = options.get("shell", "cmd").lower()
+
     if not command:
         return {"error": "command is required for run_command operation"}
-    
+
     if not message:
         return {"error": "message is required for run_command operation to track intent"}
-    
+
     if not CLI_CONFIG:
         return {
             "error": "CLI not configured",
             "message": "cli_config.json not found. Run setup.bat to generate it."
         }
-    
+
+    available_shells = [s.lower() for s in CLI_CONFIG.get("available_shells", ["cmd"])]
+    if shell not in available_shells:
+        return {"error": f"Shell '{shell}' is not available on this machine. Available: {', '.join(available_shells)}"}
+
+    if shell == "powershell":
+        full_command = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command]
+    else:
+        full_command = ["cmd", "/c", command]
+
     try:
         result = subprocess.run(
-            command,
+            full_command,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True
@@ -857,15 +1031,16 @@ def _handle_run_command_operations(options, message):
             "traceback": traceback.format_exc(),
             "command": command
         }
-    
+
     add_commit("run_command", command, message)
-    
+
     return {
         "success": result.returncode == 0,
         "exit_code": result.returncode,
         "stdout": result.stdout,
         "stderr": result.stderr,
-        "command": command
+        "command": command,
+        "shell_used": shell
     }
 
 
