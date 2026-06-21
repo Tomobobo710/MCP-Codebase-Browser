@@ -110,19 +110,40 @@ When you ask Claude to run a command, he provides a message describing what he's
 
 **Use:** Follow the installation steps above
 
-### 2. Web/Browser (SSE)
-**Best for:** Browser-based Claude, remote access, multi-user scenarios
+### 2. Web/Browser Claude (SSE Mode)
+**Best for:** Using Codebase Browser from claude.ai in the browser
 
-- HTTP/SSE protocol
-- Can be tunneled for remote access
-- Requires .env configuration
-- Optional SSL/TLS support
+The SSE version lets you connect Claude on the web (claude.ai) to your local codebase over the internet via a secure tunnel.
 
-**Setup:**
-```bash
-python codebase_server_sse.py
+**How it works:** `codebase_server_sse.py` runs a local HTTP server. `start_tunnel.bat` exposes it publicly via [serveo.net](https://serveo.net) — a free SSH tunneling service that requires no account or installation, just standard SSH. Your server becomes accessible at `https://yoursubdomain.serveo.net/sse`, which you add as a custom connector in Claude.
+
+**1. Configure your .env**
+
+Copy `.env.example` to `.env` and set your subdomain and port:
 ```
-Then configure via `.env` (copy from `.env.example`)
+TUNNEL_SUBDOMAIN=yoursubdomainhere
+SSE_PORT=9051
+```
+The subdomain is first-come, first-served — if it's not currently in use you get it. Pick something unique enough that nobody else will grab it. If it's taken you'll see an error in the tunnel window and just need to pick a different name.
+
+**2. Run `start_tunnel.bat`**
+
+This opens two windows — one running the MCP server, one running the SSH tunnel to serveo.net. When the tunnel is up you'll see:
+```
+Forwarding HTTP traffic from https://yoursubdomainhere.serveo.net
+```
+
+**3. Add as a connector in Claude**
+
+Go to Claude.ai → Settings → Connectors → Add custom connector and enter your full SSE URL:
+```
+https://yoursubdomainhere.serveo.net/sse
+```
+
+**Notes:**
+- Serveo handles HTTPS automatically — no SSL cert setup needed
+- Your subdomain isn't reserved — if your tunnel is down someone else could claim it. Just pick a new name in `.env` if that happens
+- For a guaranteed persistent subdomain you'd need to own a domain and add DNS records pointing to serveo.net — see [serveo.net docs](https://serveo.net/docs/)
 
 ## Configuration
 
@@ -133,11 +154,7 @@ When you run `setup.bat`, a `cli_config.json` is created that tells Claude:
 - How to invoke commands
 
 ### SSE Configuration (.env)
-For the SSE version, create a `.env` file from `.env.example`:
-```bash
-cp .env.example .env
-# Edit .env with your settings
-```
+For the SSE version, copy `.env.example` to `.env` and configure your settings. At minimum set `TUNNEL_SUBDOMAIN` to use `start_tunnel.bat`.
 
 **Important:** Never commit `.env` to version control (it's in `.gitignore`)
 

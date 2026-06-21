@@ -1,4 +1,3 @@
-from mcp.server.fastmcp import FastMCP
 import os
 import sys
 import shutil
@@ -10,69 +9,53 @@ import traceback
 import json
 from datetime import datetime
 import subprocess
+from typing import Any
+
+import mcp.server.stdio
+import mcp.types as types
+from mcp.server.lowlevel import Server
 
 # Auto-detect CODEBASE_PATH relative to script location
-CODEBASE_PATH = None  # Automatically determined relative to script
+script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+CODEBASE_PATH = None
 
 # CLI configuration
 CLI_CONFIG = None
 
 def load_cli_config():
-    """
-    Load CLI configuration from cli_config.json if it exists.
-    
-    Returns:
-        dict: CLI configuration or empty dict if not found.
-    """
+    """Load CLI configuration from cli_config.json if it exists."""
     try:
-        script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
         config_path = script_dir / "cli_config.json"
-        
         if config_path.exists():
             with open(config_path, 'r') as f:
                 return json.load(f)
     except Exception as e:
-        print(f"Warning: Could not load CLI config: {e}")
-    
+        print(f"Warning: Could not load CLI config: {e}", file=sys.stderr)
     return {}
 
-# Maximum result size in characters (serialized JSON)
-MAX_RESULT_SIZE = 99000
-
 def get_codebase_path():
-    """
-    Automatically determine the codebase path based on script location.
-    
-    Returns:
-        str: The absolute path to the Project directory.
-    """
-    script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+    """Automatically determine the codebase path based on script location."""
     project_dir = script_dir / "Project"
-    
-    # Create Project directory if it doesn't exist
     if not project_dir.exists():
         os.makedirs(project_dir)
-        print(f"Created Project directory at: {project_dir}")
-        # Add a README file to explain what to do
+        print(f"Created Project directory at: {project_dir}", file=sys.stderr)
         with open(project_dir / "README.txt", "w") as f:
             f.write("Put your project files in this directory.\n")
             f.write("They will be automatically indexed by the MCP Codebase Browser.\n")
-    
     return str(project_dir)
 
 # Set up the codebase path
 if CODEBASE_PATH is None:
     CODEBASE_PATH = get_codebase_path()
 
-# Load CLI config on startup
+# Load CLI config
 CLI_CONFIG = load_cli_config()
 
-# Create an MCP server
-mcp = FastMCP("MCP Codebase Browser")
+# Maximum result size in characters (serialized JSON)
+MAX_RESULT_SIZE = 99000
 
 def get_history_path():
     """Get the path to the history directory and ensure it exists."""
-    script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
     history_dir = script_dir / "History"
     history_dir.mkdir(exist_ok=True)
     return history_dir
@@ -81,44 +64,29 @@ def get_history_file():
     """Get the path to the history file and ensure it exists."""
     history_dir = get_history_path()
     history_file = history_dir / "commits.json"
-    
     if not history_file.exists():
-        # Create empty history file
         with open(history_file, 'w') as f:
             json.dump([], f)
-    
     return history_file
 
 def add_commit(operation, path, message):
     """Add a commit entry to the history file with FIFO management."""
     try:
         history_file = get_history_file()
-        
-        # Read existing history
         with open(history_file, 'r') as f:
             history = json.load(f)
-        
-        # Create new commit entry
         commit = {
-            "timestamp": datetime.now().isoformat()[:16],  # Compact: 2023-12-15T14:30
+            "timestamp": datetime.now().isoformat()[:16],
             "operation": operation,
             "path": path or "",
             "message": message
         }
-        
-        # Add to beginning of list (newest first)
         history.insert(0, commit)
-        
-        # Keep only last 25 commits (FIFO)
         history = history[:25]
-        
-        # Write back to file
         with open(history_file, 'w') as f:
             json.dump(history, f, indent=2)
-            
     except Exception as e:
-        # Don't fail operations if history logging fails
-        print(f"Warning: Could not log commit to history: {e}")
+        print(f"Warning: Could not log commit to history: {e}", file=sys.stderr)
 
 def is_file_locked(filepath):
     """Check if a file is locked by another process."""
@@ -134,33 +102,19 @@ def should_skip_path(path_str):
     return 'node_modules' in path_parts
 
 def check_result_size(result):
-    """
-    Check if the result is too large and return a warning message if it is.
-    
-    Args:
-        result (dict): The result to check
-        
-    Returns:
-        dict: The original result if it's not too large, or a warning message if it is.
-    """
-    # Serialize the result to JSON to get its approximate size
+    """Check if the result is too large and return a warning message if it is."""
     result_json = json.dumps(result)
     result_size = len(result_json)
     
-    # If the result is too large, return a warning message instead
     if result_size > MAX_RESULT_SIZE:
         op_type = result.get("operation_type", "operation")
-        
-        # Try to extract relevant metadata about what was being requested
         path = result.get("path", "")
         count = result.get("count", 0)
-        
         detail = ""
         if path:
             detail += f" for '{path}'"
         if count:
             detail += f" ({count} items)"
-            
         return {
             "error": f"Result too large ({result_size} characters)",
             "message": f"The {op_type} result{detail} exceeds the size limit of {MAX_RESULT_SIZE} characters. Try a more specific operation or request fewer items.",
@@ -172,212 +126,95 @@ def check_result_size(result):
                 "Break your task into smaller operations"
             ]
         }
-    
     return result
 
-@mcp.tool()
-def codebase_browser(operation: str, path: str = None, options: dict = None, message: str = None):
-    """
-    All-in-one codebase browser tool for file management, editing, searching, and more.
-    
-    Parameters:
-    - operation: (Required) Operation to perform, one of the following groups:
-    
-      1. FILE OPERATIONS: 
-         - "read": Read file content (requires path)
-         - "write": Write content to a file (requires path and message)
-         - "delete": Delete a file (requires path and message)
-         - "move": Move a file or directory (requires path, destination, and message)
-         - "copy": Copy a file or directory (requires path, destination, and message)
-         - "list": List directory contents (requires path)
-         - "mkdir": Create a directory (requires path and message)
-         - "rmdir": Remove a directory (requires path and message)
-      
-      2. EDIT OPERATIONS:
-         - "edit": Edit file content with replace operations (requires path and message)
-      
-      3. SEARCH OPERATIONS:
-         - "search": Search for content in files (requires search_term)
-      
-      4. BACKUP OPERATIONS:
-         - "backup_create": Create a backup of the codebase (path not required)
-         - "backup_list": List available backups (path not required)
-         - "backup_restore": Restore from a backup (path not required, requires name)
-         - "browse_backup": Browse backup contents READ-ONLY (requires backup name)
-      
-      5. HISTORY OPERATIONS:
-         - "read_recent_commits": Read recent commit history (no other parameters needed)
-      
-      6. CLI OPERATIONS:
-         - "run_command": Execute a shell command (requires command in options)
-         (Also requires message parameter for commit tracking)
-    
-    - path: (Required for most operations) File or directory path to operate on
-           Paths are relative to the codebase root directory
-    
-    - message: (Required for write operations) Brief description of the change being made
-              Examples: "fixed typo in error message preventing proper user feedback"
-                       "updated function signature in utils.py to accept optional timeout parameter"
-                       "refactored database connection logic to use connection pooling"
-    
-    - options: (Optional) Additional parameters for specific operations:
-    
-      1. FILE OPERATIONS:
-         - read: {
-             "format": "text" or "lines" (Optional, default: "text"),
-             "start_line": int (Optional, specifying line numbers will automatically use "lines" format),
-             "end_line": int (Optional, defaults to start_line+1 if start_line is provided)
-           }
-         - write: {
-             "content": str (Required, text to write to the file)
-           }
-         - move: {
-             "destination": str (Required, destination path),
-             "overwrite": bool (Optional, default: False)
-           }
-         - copy: {
-             "destination": str (Required, destination path),
-             "overwrite": bool (Optional, default: False)
-           }
-         - list: {
-             "pattern": str (Optional, glob pattern for filtering, default: "**/*")
-           }
-         - rmdir: {
-             "recursive": bool (Optional, whether to remove non-empty directories, default: False)
-           }
-      
-      2. EDIT OPERATIONS:
-         - edit: (Use either operations or new_content, not both)
-           {
-             "operations": [ (Optional list of replace operations - can batch multiple edits in one call)
-               {
-                 "mode": "replace" (Required),
-                 "find": str (Required, text to find),
-                 "replace": str (Required, replacement text),
-                 "occurrence": int (Optional, which occurrence to modify, default: 1)
-               },
-               {
-                 "mode": "replace",
-                 "find": str (Another find/replace in the same file),
-                 "replace": str,
-                 "occurrence": int (Optional, default: 1)
-               }
-               ... (can include many operations to batch edits efficiently)
-             ],
-             "new_content": str (Optional, complete replacement for file content. If provided, operations are ignored)
-           }
-           
-           BATCHING EXAMPLE - Multiple edits in one call:
-           {
-             "operations": [
-               {"mode": "replace", "find": "old_function_name", "replace": "new_function_name"},
-               {"mode": "replace", "find": "TODO: implement", "replace": "# Implemented"},
-               {"mode": "replace", "find": "version = '1.0'", "replace": "version = '1.1'"}
-             ]
-           }
-      
-      3. SEARCH OPERATIONS:
-         - search: {
-             "search_term": str (Required, text to search for),
-             "file_pattern": str (Optional, glob pattern for filtering files, default: "**/*"),
-             "case_sensitive": bool (Optional, whether search is case-sensitive, default: False),
-             "max_results": int (Optional, maximum number of total matches to find, default: 200),
-             "max_display_results": int (Optional, maximum number of matches to display, default: 25)
-           }
-      
-      4. BACKUP OPERATIONS:
-         - backup_create: {
-             "name": str (Optional, custom name for the backup, default: timestamp-based name)
-           }
-         - backup_list: {} (No additional options required)
-         - backup_restore: {
-             "name": str (Required, name of the backup to restore)
-           }
-         - browse_backup: {
-             "name": str (Required, name of the backup to browse),
-             "path": str (Optional, specific path within backup to browse, default: root)
-           }
-      
-      5. HISTORY OPERATIONS:
-         - read_recent_commits: {} (No additional options required)
-      
-      6. CLI OPERATIONS:
-         - run_command: {
-             "command": str (Required, the shell command to execute)
-           }
-    
-    Returns:
-        dict: Response varies by operation, but typically includes:
-              - For successful operations: {"success": True, ...relevant data...}
-              - For unsuccessful operations: {"error": "Error message"}
-              - For read operations: {"content": str} or {"lines": list[dict]}
-              - For list operations: {"files": list[str], "directories": list[str]}
-              - For search operations: {"matches": list[dict], "totalMatches": int, "filesWithMatches": int, ...}
-              - For backup operations: Operation-specific status and data
-              - For history operations: {"commits": list[dict], ...}
-    """
-    options = options or {}
-    
-    # Track what operation is being performed for error messages
-    result_metadata = {"operation_type": operation, "path": path}
-    
-    # GROUP 1: FILE OPERATIONS
-    if operation in ["read", "write", "delete", "move", "copy", "list", "mkdir", "rmdir"]:
-        result = _handle_file_operations(operation, path, options, message)
-        result.update(result_metadata)
-        return check_result_size(result)
-    
-    # GROUP 2: EDIT OPERATIONS
-    elif operation == "edit":
-        result = _handle_edit_operations(path, options, message)
-        result.update(result_metadata)
-        return check_result_size(result)
-    
-    # GROUP 3: SEARCH OPERATIONS
-    elif operation == "search":
-        result = _handle_search_operations(options)
-        result.update(result_metadata)
-        return check_result_size(result)
-    
-    # GROUP 4: BACKUP OPERATIONS
-    elif operation in ["backup_create", "backup_list", "backup_restore", "browse_backup"]:
-        result = _handle_backup_operations(operation.replace("backup_", ""), options)
-        result.update(result_metadata)
-        return check_result_size(result)
-    
-    # GROUP 5: HISTORY OPERATIONS
-    elif operation == "read_recent_commits":
-        result = _handle_history_operations()
-        result.update(result_metadata)
-        return check_result_size(result)
-    
-    # GROUP 6: CLI OPERATIONS
-    elif operation == "run_command":
-        result = _handle_run_command_operations(options, message)
-        result.update(result_metadata)
-        return check_result_size(result)
-    
-    else:
-        return {"error": f"Unknown operation: {operation}. See documentation for valid operations."}
+# Create the low-level MCP server
+server = Server("MCP Codebase Browser")
 
+@server.list_tools()
+async def list_tools() -> list[types.Tool]:
+    """List available tools."""
+    return [
+        types.Tool(
+            name="codebase_browser",
+            description="All-in-one codebase browser tool for file management, editing, searching, and more.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "description": "Operation to perform: read, write, delete, move, copy, list, mkdir, rmdir, edit, search, backup_create, backup_list, backup_restore, browse_backup, read_recent_commits, run_command"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File or directory path (relative to codebase root)"
+                    },
+                    "options": {
+                        "type": "object",
+                        "description": "Additional parameters for specific operations"
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Description of the operation for commit tracking"
+                    }
+                },
+                "required": ["operation"]
+            }
+        )
+    ]
+
+@server.call_tool()
+async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
+    """Handle tool calls."""
+    if name != "codebase_browser":
+        return [types.TextContent(type="text", text=json.dumps({"error": f"Unknown tool: {name}"}))]
+    
+    operation = arguments.get("operation")
+    path = arguments.get("path")
+    options = arguments.get("options", {})
+    message = arguments.get("message")
+    
+    try:
+        result = {}
+        result_metadata = {"operation_type": operation, "path": path}
+        
+        # FILE OPERATIONS
+        if operation in ["read", "write", "delete", "move", "copy", "list", "mkdir", "rmdir"]:
+            result = _handle_file_operations(operation, path, options, message)
+        # EDIT OPERATIONS
+        elif operation == "edit":
+            result = _handle_edit_operations(path, options, message)
+        # SEARCH OPERATIONS
+        elif operation == "search":
+            result = _handle_search_operations(options)
+        # BACKUP OPERATIONS
+        elif operation in ["backup_create", "backup_list", "backup_restore", "browse_backup"]:
+            result = _handle_backup_operations(operation.replace("backup_", ""), options)
+        # HISTORY OPERATIONS
+        elif operation == "read_recent_commits":
+            result = _handle_history_operations()
+        # CLI OPERATIONS
+        elif operation == "run_command":
+            result = _handle_run_command_operations(options, message)
+        else:
+            result = {"error": f"Unknown operation: {operation}. See documentation for valid operations."}
+        
+        result.update(result_metadata)
+        result = check_result_size(result)
+        return [types.TextContent(type="text", text=json.dumps(result))]
+        
+    except Exception as e:
+        error_result = {
+            "error": f"Unexpected error: {str(e)}",
+            "traceback": traceback.format_exc()
+        }
+        return [types.TextContent(type="text", text=json.dumps(error_result))]
 
 def _handle_file_operations(operation, path, options, message):
-    """
-    Handle all file system operations.
-    
-    Args:
-        operation (str): The file operation to perform.
-        path (str): File or directory path to operate on.
-        options (dict): Additional options for the operation.
-        message (str): Commit message for write operations.
-        
-    Returns:
-        dict: Operation result.
-    """
+    """Handle all file system operations."""
     if path is None:
         return {"error": "Path is required for file operations"}
     
-    # Check if message is required for write operations
     write_operations = ["write", "delete", "move", "copy", "mkdir", "rmdir"]
     if operation in write_operations and not message:
         return {"error": f"Message parameter is required for {operation} operation. Provide a brief description of the change."}
@@ -393,7 +230,6 @@ def _handle_file_operations(operation, path, options, message):
             if not dir_path.exists():
                 return {"error": "Directory not found"}
             
-            # Get files matching pattern, excluding node_modules
             files = []
             for f in glob.glob(str(dir_path / pattern), recursive=True):
                 if os.path.isfile(f):
@@ -401,17 +237,12 @@ def _handle_file_operations(operation, path, options, message):
                     if not should_skip_path(rel_path):
                         files.append(rel_path)
             
-            # Get directories, excluding node_modules
             dirs = []
             for d in os.scandir(str(dir_path)):
                 if d.is_dir() and not should_skip_path(d.name):
                     dirs.append(d.name + '/')
             
-            return {
-                "files": files,
-                "directories": dirs,
-                "path": path
-            }
+            return {"files": files, "directories": dirs, "path": path}
             
         # READ FILE
         elif operation == "read":
@@ -422,20 +253,16 @@ def _handle_file_operations(operation, path, options, message):
             start_line = options.get("start_line")
             end_line = options.get("end_line")
             
-            # Auto-switch to lines format if line filtering is requested
             if start_line is not None and format == "text":
                 format = "lines"
             
             with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
                 
-            # Check file size before processing - if it's too large, return early
             if len(content) > MAX_RESULT_SIZE:
                 content_length = len(content)
                 line_count = content.count('\n') + 1
                 
-                # If no line filtering is requested but the file is too large, 
-                # provide guidance on using line filtering
                 if start_line is None:
                     return {
                         "error": "File too large",
@@ -445,57 +272,29 @@ def _handle_file_operations(operation, path, options, message):
                         "max_size": MAX_RESULT_SIZE
                     }
                 
-            # Split content into lines for both formats if line filtering is requested
             if start_line is not None:
                 lines = content.splitlines(True)
                 start_idx = max(0, start_line - 1)
                 end_idx = end_line if end_line is not None else start_idx + 1
-                
-                # Apply line filtering
                 filtered_lines = lines[start_idx:end_idx]
                 
                 if format == "lines":
-                    # Return structured line objects
                     structured_lines = []
                     for i, line in enumerate(filtered_lines):
-                        structured_lines.append({
-                            "lineNo": start_line + i,
-                            "content": line
-                        })
-                        
-                    return {
-                        "lines": structured_lines,
-                        "count": len(structured_lines)
-                    }
+                        structured_lines.append({"lineNo": start_line + i, "content": line})
+                    return {"lines": structured_lines, "count": len(structured_lines)}
                 else:
-                    # Return filtered text content
                     filtered_content = "".join(filtered_lines)
-                    return {
-                        "content": filtered_content,
-                        "count": filtered_content.count('\n') + 1
-                    }
+                    return {"content": filtered_content, "count": filtered_content.count('\n') + 1}
             else:
-                # No line filtering requested
                 if format == "lines":
-                    # Return all lines in structured format
                     structured_lines = []
                     lines = content.splitlines(True)
                     for i, line in enumerate(lines):
-                        structured_lines.append({
-                            "lineNo": i + 1,
-                            "content": line
-                        })
-                        
-                    return {
-                        "lines": structured_lines,
-                        "count": len(structured_lines)
-                    }
+                        structured_lines.append({"lineNo": i + 1, "content": line})
+                    return {"lines": structured_lines, "count": len(structured_lines)}
                 else:
-                    # Return complete content
-                    return {
-                        "content": content,
-                        "count": content.count('\n') + 1
-                    }
+                    return {"content": content, "count": content.count('\n') + 1}
                 
         # WRITE FILE
         elif operation == "write":
@@ -503,84 +302,59 @@ def _handle_file_operations(operation, path, options, message):
             if content is None:
                 return {"error": "content is required for write operation"}
             
-            # Check if file is locked
             if full_path.exists() and is_file_locked(str(full_path)):
                 return {
                     "error": "File is currently open",
                     "message": f"Cannot write to '{path}' because it appears to be open in another application. Please close the file and try again.",
-                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
                 
             full_path.parent.mkdir(parents=True, exist_ok=True)
-            
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
-            
-            # Log to history
             add_commit(operation, path, message)
-                
             return {"success": True}
             
         # DELETE FILE
         elif operation == "delete":
             if not full_path.exists():
                 return {"error": "File not found"}
-                
             if not full_path.is_file():
                 return {"error": "Path is not a file"}
-            
-            # Check if file is locked
             if is_file_locked(str(full_path)):
                 return {
                     "error": "File is currently open",
                     "message": f"Cannot delete '{path}' because it appears to be open in another application. Please close the file and try again.",
-                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
-                
             os.remove(full_path)
-            
-            # Log to history
             add_commit(operation, path, message)
-            
             return {"success": True}
                 
         # MAKE DIRECTORY
         elif operation == "mkdir":
             full_path.mkdir(parents=True, exist_ok=True)
-            
-            # Log to history
             add_commit(operation, path, message)
-            
             return {"success": True}
             
         # REMOVE DIRECTORY
         elif operation == "rmdir":
             if not full_path.exists():
                 return {"error": "Directory not found"}
-                
             if not full_path.is_dir():
                 return {"error": "Path is not a directory"}
                 
             recursive = options.get("recursive", False)
-            
             try:
                 if recursive:
                     shutil.rmtree(full_path)
                 else:
-                    os.rmdir(full_path)  # Will only work if directory is empty
+                    os.rmdir(full_path)
             except OSError as e:
                 if not recursive:
                     return {"error": "Directory is not empty. Use recursive=True to remove non-empty directories."}
                 else:
-                    return {
-                        "error": "Could not remove directory",
-                        "message": f"Directory removal failed: {str(e)}",
-                        "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
-                    }
+                    return {"error": "Could not remove directory", "message": f"Directory removal failed: {str(e)}"}
             
-            # Log to history
             add_commit(operation, path, message)
-                
             return {"success": True}
             
         # MOVE FILE/DIRECTORY
@@ -599,12 +373,10 @@ def _handle_file_operations(operation, path, options, message):
             if dest_path.exists() and not overwrite:
                 return {"error": "Destination already exists. Set overwrite=True to replace it."}
             
-            # Check if source file is locked
             if full_path.is_file() and is_file_locked(str(full_path)):
                 return {
                     "error": "File is currently open",
                     "message": f"Cannot move '{path}' because it appears to be open in another application. Please close the file and try again.",
-                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
                 
             dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -615,12 +387,9 @@ def _handle_file_operations(operation, path, options, message):
                 return {
                     "error": "Move operation failed",
                     "message": f"Could not move '{path}' to '{destination}': {str(e)}",
-                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
             
-            # Log to history
             add_commit(operation, f"{path} -> {destination}", message)
-            
             return {"success": True}
             
         # COPY FILE/DIRECTORY
@@ -650,33 +419,20 @@ def _handle_file_operations(operation, path, options, message):
                 return {
                     "error": "Copy operation failed",
                     "message": f"Could not copy '{path}' to '{destination}': {str(e)}",
-                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
             
-            # Log to history
             add_commit(operation, f"{path} -> {destination}", message)
-            
             return {"success": True}
         
     except Exception as e:
         return {
             "error": f"Error during file operation: {str(e)}",
-            "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+            "traceback": traceback.format_exc()
         }
 
 
 def _handle_edit_operations(path, options, message):
-    """
-    Handle file editing operations with simple string replacement.
-    
-    Args:
-        path (str): Path to the file to edit.
-        options (dict): Edit options including operations or new_content.
-        message (str): Commit message for the edit.
-        
-    Returns:
-        dict: Edit operation result.
-    """
+    """Handle file editing operations with simple string replacement."""
     if path is None:
         return {"error": "Path is required for edit operations"}
     
@@ -688,47 +444,36 @@ def _handle_edit_operations(path, options, message):
     new_content = options.get("new_content")
     
     try:
-        # Handle full file replacement
         if new_content is not None:
-            # Check if file is locked
             if full_path.exists() and is_file_locked(str(full_path)):
                 return {
                     "error": "File is currently open",
                     "message": f"Cannot edit '{path}' because it appears to be open in another application. Please close the file and try again.",
-                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
                 
-            # Create parent directories if they don't exist
             full_path.parent.mkdir(parents=True, exist_ok=True)
             
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(new_content)
             
-            # Log to history
             add_commit("edit", path, message)
-                
             return {"success": True, "message": "File content replaced"}
             
-        # Check if file exists
         if not full_path.exists():
             return {"error": "File not found"}
         
-        # Check if file is locked
         if is_file_locked(str(full_path)):
             return {
                 "error": "File is currently open",
                 "message": f"Cannot edit '{path}' because it appears to be open in another application. Please close the file and try again.",
-                "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
             }
             
-        # Read original content
         with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()
             
         modified_content = content
         applied_operations = 0
         
-        # Apply each operation
         for op in operations:
             mode = op.get("mode", "")
             
@@ -737,14 +482,11 @@ def _handle_edit_operations(path, options, message):
                 replace_text = op["replace"]
                 occurrence = op.get("occurrence", 1)
                 
-                # Handle occurrence-specific replacement
                 if occurrence == 1:
-                    # Replace first occurrence
                     if find_text in modified_content:
                         modified_content = modified_content.replace(find_text, replace_text, 1)
                         applied_operations += 1
                 else:
-                    # Find the nth occurrence
                     start_pos = -1
                     for i in range(occurrence):
                         start_pos = modified_content.find(find_text, start_pos + 1)
@@ -752,7 +494,6 @@ def _handle_edit_operations(path, options, message):
                             break
                     
                     if start_pos != -1:
-                        # Replace at the specific position
                         modified_content = (
                             modified_content[:start_pos] + 
                             replace_text + 
@@ -760,37 +501,26 @@ def _handle_edit_operations(path, options, message):
                         )
                         applied_operations += 1
         
-        # Write the modified content back to the file
         with open(full_path, 'w', encoding='utf-8') as f:
             f.write(modified_content)
         
-        # Log to history
         add_commit("edit", path, message)
-            
         return {"success": True, "operations_applied": applied_operations}
             
     except Exception as e:
         return {
             "error": f"Error during edit operation: {str(e)}",
-            "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+            "traceback": traceback.format_exc()
         }
 
 
 def _handle_search_operations(options):
-    """
-    Handle code search operations with simple match results.
-    
-    Args:
-        options (dict): Search parameters.
-        
-    Returns:
-        dict: Search results - simple list of file/line matches.
-    """
+    """Handle code search operations with simple match results."""
     search_term = options.get("search_term", "")
     file_pattern = options.get("file_pattern", "**/*")
     case_sensitive = options.get("case_sensitive", False)
-    max_results = options.get("max_results", 200)  # Increased since results are smaller
-    max_display_results = options.get("max_display_results", 25)  # Show more results
+    max_results = options.get("max_results", 200)
+    max_display_results = options.get("max_display_results", 25)
     
     if not search_term:
         return {"error": "search_term is required for search operation"}
@@ -802,7 +532,6 @@ def _handle_search_operations(options):
     base_path = Path(CODEBASE_PATH)
     
     try:
-        # Find all files recursively
         for root, _, files in os.walk(base_path):
             for filename in files:
                 if total_matches >= max_results:
@@ -811,33 +540,26 @@ def _handle_search_operations(options):
                 full_path = os.path.join(root, filename)
                 rel_path = os.path.relpath(full_path, base_path)
                 
-                # Skip node_modules and check pattern
                 if should_skip_path(rel_path) or not fnmatch(rel_path, file_pattern):
                     continue
                 
                 files_checked += 1
                 
                 try:
-                    # Skip very large files
-                    if os.path.getsize(full_path) > 10 * 1024 * 1024:  # 10MB
+                    if os.path.getsize(full_path) > 10 * 1024 * 1024:
                         continue
                         
-                    # Read the file line by line
                     with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
                         lines = f.readlines()
                     
                     file_has_matches = False
                     
-                    # Search each line
                     for line_idx, line in enumerate(lines):
-                        # Clean the line content - remove trailing whitespace and normalize
                         clean_line = line.rstrip('\r\n\t ')
                         
-                        # Skip empty lines
                         if not clean_line:
                             continue
                             
-                        # Check for match
                         if case_sensitive:
                             match_pos = clean_line.find(search_term)
                         else:
@@ -846,7 +568,6 @@ def _handle_search_operations(options):
                         if match_pos != -1:
                             file_has_matches = True
                             
-                            # Create simple match result
                             match_info = {
                                 "file": rel_path,
                                 "lineNumber": line_idx + 1,
@@ -863,10 +584,9 @@ def _handle_search_operations(options):
                     if file_has_matches:
                         files_with_matches += 1
                 
-                except Exception as e:
+                except Exception:
                     continue
         
-        # Return the requested number of results
         displayed_matches = matches[:max_display_results]
         truncated = len(matches) > max_display_results
         
@@ -890,25 +610,13 @@ def _handle_search_operations(options):
 
 
 def _handle_backup_operations(operation, options):
-    """
-    Handle backup operations for the codebase.
-    
-    Args:
-        operation (str): Backup operation to perform (create, list, restore, browse).
-        options (dict): Additional options for the operation.
-        
-    Returns:
-        dict: Operation result.
-    """
+    """Handle backup operations for the codebase."""
     try:
-        # Determine backup directory path
-        script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
         backup_root = script_dir / "Backups"
         
-        # Ensure backup directory exists
         if not backup_root.exists() and operation != "list":
             backup_root.mkdir(parents=True)
-            print(f"Created Backups directory at: {backup_root}")
+            print(f"Created Backups directory at: {backup_root}", file=sys.stderr)
             
         # LIST BACKUPS
         if operation == "list":
@@ -919,16 +627,13 @@ def _handle_backup_operations(operation, options):
                     "message": "No backups available yet. Use codebase_browser operation='backup_create' to create a backup."
                 }
                 
-            # Get all directories in the Backups folder
             backups = []
             for item in backup_root.iterdir():
                 if item.is_dir():
-                    # Get creation time for sorting/display
                     try:
                         created_time = item.stat().st_ctime
                         created_time_str = datetime.fromtimestamp(created_time).strftime("%Y-%m-%d %H:%M:%S")
                         
-                        # Get size of backup
                         size_bytes = sum(f.stat().st_size for f in item.glob('**/*') if f.is_file())
                         size_mb = size_bytes / (1024 * 1024)
                         
@@ -937,43 +642,36 @@ def _handle_backup_operations(operation, options):
                             "created": created_time_str,
                             "size_mb": round(size_mb, 2)
                         })
-                    except Exception as e:
-                        # If we can't get stats, just add the name
+                    except Exception:
                         backups.append({"name": item.name})
             
-            # Sort backups by creation time (newest first) if available
             backups.sort(key=lambda x: x.get("created", ""), reverse=True)
             
             return {
                 "backups": backups,
                 "count": len(backups),
-                "backup_root": "Backups"  # Only show the folder name, not the full path
+                "backup_root": "Backups"
             }
             
         # CREATE BACKUP
         elif operation == "create":
-            # Generate default backup name if none provided
             backup_name = options.get("name")
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             
             if backup_name is None:
                 backup_name = f"backup_{timestamp}"
             else:
-                # Sanitize the backup name to ensure it's a valid directory name
                 clean_name = re.sub(r'[^\w\-\.]', '_', backup_name)
-                backup_name = f"{clean_name}_{timestamp}"  # Always append timestamp
+                backup_name = f"{clean_name}_{timestamp}"
             
-            # Create full backup path
             backup_path = backup_root / backup_name
             
-            # Check if backup with this name already exists (shouldn't happen with timestamp)
             if backup_path.exists():
                 return {
                     "success": False,
                     "error": f"Backup with name '{backup_name}' already exists. This shouldn't happen with timestamp suffix."
                 }
             
-            # Copy the entire codebase to the backup location
             source_path = Path(CODEBASE_PATH)
             shutil.copytree(source_path, backup_path)
             
@@ -991,17 +689,14 @@ def _handle_backup_operations(operation, options):
                 
             backup_path = backup_root / backup_name
             
-            # Validate backup exists
             if not backup_path.exists() or not backup_path.is_dir():
                 return {
                     "success": False,
                     "error": f"Backup '{backup_name}' not found. Use codebase_browser operation='backup_list' to see available backups."
                 }
             
-            # Get target directory (codebase path)
             target_path = Path(CODEBASE_PATH)
             
-            # Check for locked files before starting restore
             locked_files = []
             for item in target_path.rglob('*'):
                 if item.is_file() and is_file_locked(str(item)):
@@ -1011,24 +706,19 @@ def _handle_backup_operations(operation, options):
                 return {
                     "error": "Files are currently open",
                     "message": f"Cannot restore because {len(locked_files)} files appear to be open in other applications. Please close all files and try again.",
-                    "locked_files": locked_files[:5],  # Show first 5 locked files
-                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
+                    "locked_files": locked_files[:5],
                 }
             
             try:
-                # Remove current codebase contents
                 if target_path.exists():
-                    # Remove all contents but keep the directory
                     for item in target_path.iterdir():
                         if item.is_dir():
                             shutil.rmtree(item)
                         else:
                             os.remove(item)
                 else:
-                    # Create target directory if it doesn't exist
                     target_path.mkdir(parents=True)
                 
-                # Copy backup contents to codebase directory
                 for item in backup_path.iterdir():
                     if item.is_dir():
                         shutil.copytree(item, target_path / item.name)
@@ -1038,7 +728,6 @@ def _handle_backup_operations(operation, options):
                 return {
                     "error": "Restore operation failed",
                     "message": f"Could not restore from backup '{backup_name}': {str(e)}",
-                    "ai_instruction": "Cease all operations and INFORM THE USER before re-attempting ANY operation."
                 }
             
             return {
@@ -1057,13 +746,11 @@ def _handle_backup_operations(operation, options):
                 
             backup_path = backup_root / backup_name
             
-            # Validate backup exists
             if not backup_path.exists() or not backup_path.is_dir():
                 return {
                     "error": f"Backup '{backup_name}' not found. Use codebase_browser operation='backup_list' to see available backups."
                 }
             
-            # Construct full browse path
             full_browse_path = backup_path
             if browse_path:
                 full_browse_path = backup_path / browse_path
@@ -1072,7 +759,6 @@ def _handle_backup_operations(operation, options):
                 return {"error": f"Path '{browse_path}' not found in backup '{backup_name}'"}
             
             if full_browse_path.is_file():
-                # Read file content
                 try:
                     with open(full_browse_path, 'r', encoding='utf-8', errors='replace') as f:
                         content = f.read()
@@ -1087,7 +773,6 @@ def _handle_backup_operations(operation, options):
                 except Exception as e:
                     return {"error": f"Could not read file: {str(e)}"}
             else:
-                # List directory contents
                 files = []
                 dirs = []
                 
@@ -1115,16 +800,10 @@ def _handle_backup_operations(operation, options):
 
 
 def _handle_history_operations():
-    """
-    Handle history operations.
-    
-    Returns:
-        dict: History operation result.
-    """
+    """Handle history operations."""
     try:
         history_file = get_history_file()
         
-        # Read history
         with open(history_file, 'r') as f:
             history = json.load(f)
         
@@ -1150,16 +829,7 @@ def _handle_history_operations():
 
 
 def _handle_run_command_operations(options, message):
-    """
-    Handle CLI command execution operations.
-    
-    Args:
-        options (dict): Command execution options.
-        message (str): Description of the command for commit tracking.
-        
-    Returns:
-        dict: Command output and exit code.
-    """
+    """Handle CLI command execution operations."""
     command = options.get("command")
     
     if not command:
@@ -1199,12 +869,12 @@ def _handle_run_command_operations(options, message):
     }
 
 
-# Start the server when script is run directly
+async def main():
+    """Run the MCP server."""
+    async with mcp.server.stdio.stdio_server() as streams:
+        await server.run(streams[0], streams[1], server.create_initialization_options())
+
+
 if __name__ == "__main__":
-    try:
-        print(f"MCP Codebase Browser running. Connect through Claude Desktop.")
-        print(f"Serving codebase from: {CODEBASE_PATH}")
-        mcp.run()
-    except Exception as e:
-        print(f"ERROR: {str(e)}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+    import anyio
+    anyio.run(main)
